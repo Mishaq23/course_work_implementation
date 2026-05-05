@@ -16,10 +16,35 @@ def collate_fn(dataset_items: list[dict]):
 
     result_batch = {}
 
-    # example of collate_fn
-    result_batch["data_object"] = torch.vstack(
-        [elem["data_object"] for elem in dataset_items]
-    )
-    result_batch["labels"] = torch.tensor([elem["labels"] for elem in dataset_items])
+    if "audio" in dataset_items[0]:
+        result_batch["audio"] = torch.stack(
+            [item["audio"] for item in dataset_items],
+            dim=0,
+        )
+
+    if "video" in dataset_items[0]:
+        result_batch["video"] = torch.stack(
+            [item["video"] for item in dataset_items],
+            dim=0,
+        )
+
+    result_batch["labels"] = torch.stack(
+        [
+            item["labels"]
+            if torch.is_tensor(item["labels"])
+            else torch.tensor(item["labels"], dtype=torch.float32)
+            for item in dataset_items
+        ],
+        dim=0,
+    ).float()
+
+    if "sample_id" in dataset_items[0]:
+        result_batch["sample_id"] = [item["sample_id"] for item in dataset_items]
+
+    if "fake_type" in dataset_items[0]:
+        result_batch["fake_type"] = [item["fake_type"] for item in dataset_items]
+
+    if "path" in dataset_items[0]:
+        result_batch["path"] = [item["path"] for item in dataset_items]
 
     return result_batch
