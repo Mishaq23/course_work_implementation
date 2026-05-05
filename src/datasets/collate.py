@@ -12,6 +12,12 @@ def _pad_audio_batch(audio_items: list[torch.Tensor]) -> torch.Tensor:
     Returns:
         [batch_size, channels, max_num_audio_samples]
     """
+    if all(
+        torch.is_tensor(audio) and audio.ndim == 1
+        for audio in audio_items
+    ):
+        return torch.stack([audio.float() for audio in audio_items], dim=0)
+
     processed = []
 
     max_channels = 1
@@ -100,6 +106,33 @@ def collate_fn(dataset_items: list[dict]) -> dict:
         result_batch["fake_type"] = [
             item["fake_type"] for item in dataset_items
         ]
+
+    if "degradation" in dataset_items[0]:
+        result_batch["degradation"] = [
+            item["degradation"] for item in dataset_items
+        ]
+
+    if "audio_degradation" in dataset_items[0]:
+        result_batch["audio_degradation"] = [
+            item["audio_degradation"] for item in dataset_items
+        ]
+
+    if "video_degradation" in dataset_items[0]:
+        result_batch["video_degradation"] = [
+            item["video_degradation"] for item in dataset_items
+        ]
+
+    if "audio_sample_rate" in dataset_items[0]:
+        result_batch["audio_sample_rate"] = torch.tensor(
+            [item["audio_sample_rate"] for item in dataset_items],
+            dtype=torch.long,
+        )
+
+    if "video_fps" in dataset_items[0]:
+        result_batch["video_fps"] = torch.tensor(
+            [item["video_fps"] for item in dataset_items],
+            dtype=torch.float32,
+        )
 
     if "path" in dataset_items[0]:
         result_batch["path"] = [

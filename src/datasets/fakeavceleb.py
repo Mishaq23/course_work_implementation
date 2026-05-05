@@ -19,6 +19,7 @@ class FakeAVCelebDataset(AVRawDataset):
     def __init__(
         self,
         root_dir: str | Path,
+        index_dir: str | Path | None = None,
         num_frames: int = 16,
         limit: int | None = None,
         shuffle_index: bool = False,
@@ -28,15 +29,22 @@ class FakeAVCelebDataset(AVRawDataset):
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         split_seed: int = 42,
+        rebuild_index: bool = False,
+        video_extensions: tuple[str, ...] = (".mp4",),
         *args,
         **kwargs,
     ):
         self.root_dir = Path(root_dir)
+        self.index_dir = Path(index_dir) if index_dir is not None else self.root_dir
+        self.video_extensions = video_extensions
+        self.rebuild_index = rebuild_index
 
         if not self.root_dir.exists():
             raise FileNotFoundError(
                 f"FakeAVCeleb root_dir does not exist: {self.root_dir}"
             )
+
+        self.index_dir.mkdir(parents=True, exist_ok=True)
 
         if name not in ["train", "val", "test", "full"]:
             raise ValueError(
@@ -52,9 +60,9 @@ class FakeAVCelebDataset(AVRawDataset):
 
         self._check_split_ratios()
 
-        index_path = self.root_dir / f"index_{name}.json"
+        index_path = self.index_dir / f"index_{name}.json"
 
-        if not index_path.exists():
+        if self.rebuild_index or not index_path.exists():
             self._create_all_indices()
 
         index = read_json(str(index_path))
@@ -79,12 +87,12 @@ class FakeAVCelebDataset(AVRawDataset):
             )
 
     def _create_all_indices(self) -> None:
-        full_index_path = self.root_dir / "index_full.json"
-        train_index_path = self.root_dir / "index_train.json"
-        val_index_path = self.root_dir / "index_val.json"
-        test_index_path = self.root_dir / "index_test.json"
+        full_index_path = self.index_dir / "index_full.json"
+        train_index_path = self.index_dir / "index_train.json"
+        val_index_path = self.index_dir / "index_val.json"
+        test_index_path = self.index_dir / "index_test.json"
 
-        if full_index_path.exists():
+        if full_index_path.exists() and not self.rebuild_index:
             full_index = read_json(str(full_index_path))
         else:
             full_index = self._create_full_index()
@@ -97,10 +105,17 @@ class FakeAVCelebDataset(AVRawDataset):
         write_json(test_index, str(test_index_path))
 
     def _create_full_index(self) -> list[dict]:
-        video_paths = sorted(self.root_dir.rglob("*.mp4"))
+        video_paths = sorted(
+            path
+            for path in self.root_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in self.video_extensions
+        )
 
         if len(video_paths) == 0:
-            raise RuntimeError(f"No .mp4 files found in {self.root_dir}")
+            raise RuntimeError(
+                f"No video files with extensions {self.video_extensions} "
+                f"found in {self.root_dir}"
+            )
 
         index = []
 
@@ -108,20 +123,25 @@ class FakeAVCelebDataset(AVRawDataset):
 
         for idx, video_path in enumerate(tqdm(video_paths)):
             label, fake_type = infer_fakeavceleb_label(video_path)
+            relative_path = video_path.relative_to(self.root_dir)
 
             index.append(
                 {
                     "sample_id": f"fakeavceleb_{idx:06d}",
                     "path": str(video_path),
+                    "relative_path": str(relative_path),
                     "label": label,
                     "dataset": "fakeavceleb",
                     "fake_type": fake_type,
+                    "degradation": "clean",
+                    "audio_degradation": "clean",
+                    "video_degradation": "clean",
                 }
             )
 
         return index
 
-    def _split_index(self, full_index: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    def _split_index(self, full_index: list[dict]):
         rng = random.Random(self.split_seed)
 
         real_samples = [item for item in full_index if item["label"] == 0]
@@ -150,10 +170,7 @@ class FakeAVCelebDataset(AVRawDataset):
 
         return train_index, val_index, test_index
 
-    def _split_group(
-        self,
-        samples: list[dict],
-    ) -> tuple[list[dict], list[dict], list[dict]]:
+    def _split_group(self, samples: list[dict]):
         n_total = len(samples)
 
         n_train = int(n_total * self.train_ratio)

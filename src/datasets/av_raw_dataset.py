@@ -35,6 +35,7 @@ class AVRawDataset(BaseDataset):
 
         video = self._sample_frames(video)
         video = self._preprocess_video(video)
+        audio = self._preprocess_audio(audio)
 
         instance_data = {
             "sample_id": item["sample_id"],
@@ -43,6 +44,11 @@ class AVRawDataset(BaseDataset):
             "audio": audio,
             "labels": torch.tensor(item["label"], dtype=torch.float32),
             "fake_type": item.get("fake_type", "unknown"),
+            "degradation": item.get("degradation", "clean"),
+            "audio_degradation": item.get("audio_degradation", "clean"),
+            "video_degradation": item.get("video_degradation", "clean"),
+            "audio_sample_rate": info.get("audio_fps", 0),
+            "video_fps": info.get("video_fps", 0),
             "path": item["path"],
         }
 
@@ -72,3 +78,17 @@ class AVRawDataset(BaseDataset):
         video = video.float() / 255.0
         video = video.permute(0, 3, 1, 2)
         return video
+
+    def _preprocess_audio(self, audio: torch.Tensor | None) -> torch.Tensor:
+        if audio is None:
+            return torch.zeros(1, 1)
+
+        audio = audio.float()
+
+        if audio.ndim == 1:
+            audio = audio.unsqueeze(0)
+
+        if audio.numel() == 0:
+            return torch.zeros(1, 1)
+
+        return audio

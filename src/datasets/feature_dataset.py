@@ -48,6 +48,9 @@ class AVFeatureDataset(BaseDataset):
                     "label": self.labels[sample_id],
                     "dataset": meta.get("dataset", "unknown"),
                     "fake_type": meta.get("fake_type", "unknown"),
+                    "degradation": meta.get("degradation", "clean"),
+                    "audio_degradation": meta.get("audio_degradation", "clean"),
+                    "video_degradation": meta.get("video_degradation", "clean"),
                 }
             )
 
@@ -57,11 +60,17 @@ class AVFeatureDataset(BaseDataset):
         item = self._index[ind]
         sample_id = item["sample_id"]
 
-        return {
+        instance_data = {
             "sample_id": sample_id,
             "dataset": item["dataset"],
             "audio": self.audio_features[sample_id].float(),
             "video": self.video_features[sample_id].float(),
             "labels": torch.tensor(item["label"], dtype=torch.float32),
             "fake_type": item["fake_type"],
+            "degradation": item["degradation"],
+            "audio_degradation": item["audio_degradation"],
+            "video_degradation": item["video_degradation"],
         }
+
+        instance_data = self.preprocess_data(instance_data)
+        return instance_data
