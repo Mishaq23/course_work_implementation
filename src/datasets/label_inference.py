@@ -1,13 +1,13 @@
 from pathlib import Path
 
 
-def infer_label_from_path(path: str | Path) -> tuple[int, str]:
+def infer_fakeavceleb_label(path: str | Path) -> tuple[int, str]:
     path_str = str(path).lower()
 
-    real_video = "RealVideo" in path_str
-    fake_video = "FakeVideo" in path_str
-    real_audio = "RealAudio" in path_str
-    fake_audio = "FakeAudio" in path_str
+    real_video = "realvideo" in path_str
+    fake_video = "fakevideo" in path_str
+    real_audio = "realaudio" in path_str
+    fake_audio = "fakeaudio" in path_str
 
     if real_video and real_audio:
         return 0, "real"
