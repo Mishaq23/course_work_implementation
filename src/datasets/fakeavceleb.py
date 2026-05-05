@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 
 from tqdm.auto import tqdm
@@ -11,9 +12,8 @@ class FakeAVCelebDataset(AVRawDataset):
     """
     Dataset class for FakeAVCeleb.
 
-    The dataset searches for all .mp4 files inside root_dir,
-    infers labels from file paths, and creates an index with
-    metadata for each video sample.
+    It searches for all .mp4 files inside root_dir, infers labels from file paths,
+    creates a full index, and then creates deterministic train/val/test splits.
     """
 
     def __init__(
@@ -23,30 +23,41 @@ class FakeAVCelebDataset(AVRawDataset):
         limit: int | None = None,
         shuffle_index: bool = False,
         instance_transforms=None,
-        name: str = "full",
+        name: str = "train",
+        train_ratio: float = 0.8,
+        val_ratio: float = 0.1,
+        test_ratio: float = 0.1,
+        split_seed: int = 42,
         *args,
         **kwargs,
     ):
-        """
-        Args:
-            root_dir (str | Path): path to FakeAVCeleb dataset root directory.
-            num_frames (int): number of frames sampled from each video.
-            limit (int | None): optional limit on dataset size.
-            shuffle_index (bool): whether to shuffle index.
-            instance_transforms: transforms applied to one dataset sample.
-            name (str): partition/index name, for example "train", "val", "test", "full".
-        """
         self.root_dir = Path(root_dir)
+
+        if not self.root_dir.exists():
+            raise FileNotFoundError(
+                f"FakeAVCeleb root_dir does not exist: {self.root_dir}"
+            )
+
+        if name not in ["train", "val", "test", "full"]:
+            raise ValueError(
+                f"Unknown split name: {name}. "
+                f"Expected one of: train, val, test, full."
+            )
+
+        self.name = name
+        self.train_ratio = train_ratio
+        self.val_ratio = val_ratio
+        self.test_ratio = test_ratio
+        self.split_seed = split_seed
+
+        self._check_split_ratios()
 
         index_path = self.root_dir / f"index_{name}.json"
 
-        # each dataset class must have an index field that
-        # contains list of dicts. Each dict contains information about
-        # the object, including label, path, dataset name, fake type, etc.
-        if index_path.exists():
-            index = read_json(str(index_path))
-        else:
-            index = self._create_index(index_path)
+        if not index_path.exists():
+            self._create_all_indices()
+
+        index = read_json(str(index_path))
 
         super().__init__(
             index=index,
@@ -58,20 +69,34 @@ class FakeAVCelebDataset(AVRawDataset):
             **kwargs,
         )
 
-    def _create_index(self, index_path: str | Path) -> list[dict]:
-        """
-        Create index for FakeAVCeleb dataset.
+    def _check_split_ratios(self) -> None:
+        total = self.train_ratio + self.val_ratio + self.test_ratio
 
-        The function recursively searches for all .mp4 files in root_dir,
-        infers label and fake type from each file path, and saves metadata
-        into index json file.
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                "train_ratio + val_ratio + test_ratio must be equal to 1. "
+                f"Got {total}."
+            )
 
-        Args:
-            index_path (str | Path): path where created index will be saved.
+    def _create_all_indices(self) -> None:
+        full_index_path = self.root_dir / "index_full.json"
+        train_index_path = self.root_dir / "index_train.json"
+        val_index_path = self.root_dir / "index_val.json"
+        test_index_path = self.root_dir / "index_test.json"
 
-        Returns:
-            index (list[dict]): list of dictionaries with metadata for each sample.
-        """
+        if full_index_path.exists():
+            full_index = read_json(str(full_index_path))
+        else:
+            full_index = self._create_full_index()
+            write_json(full_index, str(full_index_path))
+
+        train_index, val_index, test_index = self._split_index(full_index)
+
+        write_json(train_index, str(train_index_path))
+        write_json(val_index, str(val_index_path))
+        write_json(test_index, str(test_index_path))
+
+    def _create_full_index(self) -> list[dict]:
         video_paths = sorted(self.root_dir.rglob("*.mp4"))
 
         if len(video_paths) == 0:
@@ -79,7 +104,7 @@ class FakeAVCelebDataset(AVRawDataset):
 
         index = []
 
-        print("Creating FakeAVCeleb Dataset Index")
+        print("Creating FakeAVCeleb full index")
 
         for idx, video_path in enumerate(tqdm(video_paths)):
             label, fake_type = infer_fakeavceleb_label(video_path)
@@ -94,6 +119,48 @@ class FakeAVCelebDataset(AVRawDataset):
                 }
             )
 
-        write_json(index, str(index_path))
-
         return index
+
+    def _split_index(self, full_index: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+        rng = random.Random(self.split_seed)
+
+        real_samples = [item for item in full_index if item["label"] == 0]
+        fake_samples = [item for item in full_index if item["label"] == 1]
+
+        rng.shuffle(real_samples)
+        rng.shuffle(fake_samples)
+
+        real_train, real_val, real_test = self._split_group(real_samples)
+        fake_train, fake_val, fake_test = self._split_group(fake_samples)
+
+        train_index = real_train + fake_train
+        val_index = real_val + fake_val
+        test_index = real_test + fake_test
+
+        rng.shuffle(train_index)
+        rng.shuffle(val_index)
+        rng.shuffle(test_index)
+
+        print(
+            "FakeAVCeleb split sizes: "
+            f"train={len(train_index)}, "
+            f"val={len(val_index)}, "
+            f"test={len(test_index)}"
+        )
+
+        return train_index, val_index, test_index
+
+    def _split_group(
+        self,
+        samples: list[dict],
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        n_total = len(samples)
+
+        n_train = int(n_total * self.train_ratio)
+        n_val = int(n_total * self.val_ratio)
+
+        train_samples = samples[:n_train]
+        val_samples = samples[n_train : n_train + n_val]
+        test_samples = samples[n_train + n_val :]
+
+        return train_samples, val_samples, test_samples
