@@ -71,7 +71,10 @@ def load_backbones(audio_model_name_or_path: str, video_model_name_or_path: str,
         ) from exc
 
     audio_processor = AutoFeatureExtractor.from_pretrained(audio_model_name_or_path)
-    audio_model = AutoModel.from_pretrained(audio_model_name_or_path).to(device)
+    audio_model = AutoModel.from_pretrained(
+        audio_model_name_or_path,
+        low_cpu_mem_usage=False,
+    ).to(device)
     audio_model.eval()
 
     video_config = AutoConfig.from_pretrained(
@@ -83,6 +86,7 @@ def load_backbones(audio_model_name_or_path: str, video_model_name_or_path: str,
         video_model_name_or_path,
         config=video_config,
         trust_remote_code=True,
+        low_cpu_mem_usage=False,
     ).to(device)
     video_model.eval()
 
