@@ -195,16 +195,38 @@ def extract_videomae_feature(
     if "pixel_values" not in inputs:
         raise KeyError("Video processor did not return `pixel_values`.")
 
-    # VideoMAE-v2 HF model card expects [B, C, T, H, W].
-    inputs["pixel_values"] = inputs["pixel_values"].permute(0, 2, 1, 3, 4)
+    pixel_values = inputs["pixel_values"]
+    if pixel_values.ndim != 5:
+        raise ValueError(
+            f"Expected video processor output with 5 dims, got shape {tuple(pixel_values.shape)}."
+        )
+
+    # Most processors return [B, T, C, H, W], while VideoMAE models expect [B, C, T, H, W].
+    if pixel_values.shape[1] != 3 and pixel_values.shape[2] == 3:
+        pixel_values = pixel_values.permute(0, 2, 1, 3, 4)
+
+    inputs["pixel_values"] = pixel_values
     inputs = {key: value.to(device) for key, value in inputs.items()}
 
     with torch.no_grad():
         outputs = model(**inputs)
 
-    hidden_states = outputs.last_hidden_state if hasattr(outputs, "last_hidden_state") else outputs[0]
-    feature = hidden_states.mean(dim=1)
-    return feature.squeeze(0).cpu()
+    if hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
+        feature = outputs.pooler_output
+    elif hasattr(outputs, "last_hidden_state") and outputs.last_hidden_state is not None:
+        feature = outputs.last_hidden_state
+    else:
+        feature = outputs[0]
+
+    if feature.ndim == 1:
+        return feature.cpu()
+
+    if feature.ndim == 2:
+        return feature.squeeze(0).cpu() if feature.shape[0] == 1 else feature.mean(dim=0).cpu()
+
+    reduce_dims = tuple(range(1, feature.ndim - 1))
+    pooled = feature.mean(dim=reduce_dims)
+    return pooled.squeeze(0).cpu()
 
 
 def build_dataset(args, split: str):
@@ -270,7 +292,7 @@ def main():
             try:
                 sample = dataset[sample_idx]
                 sample_id = sample["sample_id"]
-                audio_features[sample_id] = extract_wavlm_feature(
+                audio_feature = extract_wavlm_feature(
                     audio=sample["audio"],
                     audio_sample_rate=int(sample.get("audio_sample_rate", 0)),
                     processor=audio_processor,
@@ -278,12 +300,14 @@ def main():
                     device=device,
                     target_sr=args.audio_target_sr,
                 )
-                video_features[sample_id] = extract_videomae_feature(
+                video_feature = extract_videomae_feature(
                     video=sample["video"],
                     processor=video_processor,
                     model=video_model,
                     device=device,
                 )
+                audio_features[sample_id] = audio_feature
+                video_features[sample_id] = video_feature
                 labels[sample_id] = int(sample["labels"].item())
                 meta[sample_id] = {
                     "dataset": sample.get("dataset", "fakeavceleb"),
