@@ -1,14 +1,12 @@
 val:
-  _target_: src.datasets.ExampleDataset
-  input_length: 1024
-  dataset_length: 15
-  n_classes: 10
-  name: "val"
+  _target_: src.datasets.SyntheticAVDataset
+  dataset_length: 16
+  audio_shape: [1024]
+  video_shape: [768]
   instance_transforms: ${transforms.instance_transforms.inference}
 test:
-  _target_: src.datasets.ExampleDataset
-  input_length: 1024
-  dataset_length: 15
-  n_classes: 10
-  name: "test"
+  _target_: src.datasets.SyntheticAVDataset
+  dataset_length: 16
+  audio_shape: [1024]
+  video_shape: [768]
   instance_transforms: ${transforms.instance_transforms.inference}

@@ -1,0 +1,12 @@
+defaults:
+  - baseline
+  - override /model: audio_only_model
+  - override /datasets: features
+  - _self_
+
+writer:
+  run_name: audio_pretrain
+
+trainer:
+  device_tensors: ["audio", "labels"]
+  monitor: "max val_AUROC"

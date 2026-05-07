@@ -4,6 +4,7 @@ train:
   index_dir: ${index_dir}
   name: train
   num_frames: ${num_frames}
+  video_size: ${video_size}
   train_ratio: 0.8
   val_ratio: 0.1
   test_ratio: 0.1
@@ -16,6 +17,7 @@ val:
   index_dir: ${index_dir}
   name: val
   num_frames: ${num_frames}
+  video_size: ${video_size}
   train_ratio: 0.8
   val_ratio: 0.1
   test_ratio: 0.1
@@ -28,6 +30,7 @@ test:
   index_dir: ${index_dir}
   name: test
   num_frames: ${num_frames}
+  video_size: ${video_size}
   train_ratio: 0.8
   val_ratio: 0.1
   test_ratio: 0.1

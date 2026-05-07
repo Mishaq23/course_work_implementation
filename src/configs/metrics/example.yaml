@@ -1,21 +1,30 @@
 device: "auto"
-train: # metrics that are calculated during training
-  - _target_: src.metrics.ExampleMetric
-    metric:
-      _target_: torchmetrics.classification.MulticlassAccuracy
-      num_classes: 10
+train:
+  - _target_: src.metrics.AccuracyMetric
     device: ${metrics.device}
-    name: "TRAIN_MulticlassAccuracy" # just an example to see difference
-inference: # metrics that are calculated during inference (eval)
-  - _target_: src.metrics.ExampleMetric
-    metric:
-      _target_: torchmetrics.classification.MulticlassAccuracy
-      num_classes: 10
+    name: "Accuracy"
+  - _target_: src.metrics.AUROCMetric
     device: ${metrics.device}
-    name: "MulticlassAccuracy"
-  - _target_: src.metrics.ExampleMetric
-    metric:
-      _target_: torchmetrics.classification.MulticlassAccuracy
-      num_classes: 10
+    name: "AUROC"
+  - _target_: src.metrics.AveragePrecisionMetric
     device: ${metrics.device}
-    name: "MulticlassAccuracy2.0"
+    name: "PRAUC"
+inference:
+  - _target_: src.metrics.AccuracyMetric
+    device: ${metrics.device}
+    name: "Accuracy"
+  - _target_: src.metrics.PrecisionMetric
+    device: ${metrics.device}
+    name: "Precision"
+  - _target_: src.metrics.RecallMetric
+    device: ${metrics.device}
+    name: "Recall"
+  - _target_: src.metrics.F1Metric
+    device: ${metrics.device}
+    name: "F1"
+  - _target_: src.metrics.AUROCMetric
+    device: ${metrics.device}
+    name: "AUROC"
+  - _target_: src.metrics.AveragePrecisionMetric
+    device: ${metrics.device}
+    name: "PRAUC"

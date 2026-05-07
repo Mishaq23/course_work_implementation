@@ -1,14 +1,12 @@
 train:
-  _target_: src.datasets.ExampleDataset
-  input_length: 1024
-  dataset_length: 15
-  n_classes: 10
+  _target_: src.datasets.SyntheticAVDataset
+  dataset_length: 10
+  audio_shape: [1024]
+  video_shape: [768]
   limit: 10
-  name: "val"
 val:
-  _target_: src.datasets.ExampleDataset
-  input_length: 1024
-  dataset_length: 15
+  _target_: src.datasets.SyntheticAVDataset
+  dataset_length: 10
+  audio_shape: [1024]
+  video_shape: [768]
   limit: 10
-  n_classes: 10
-  name: "val"

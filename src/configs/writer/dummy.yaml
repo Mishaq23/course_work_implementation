@@ -1,0 +1,5 @@
+_target_: src.logger.DummyWriter
+run_name: "debug"
+loss_names: ["loss"]
+log_checkpoints: False
+id_length: 8

@@ -1,0 +1,22 @@
+defaults:
+  - baseline
+  - override /model: gated_av_model
+  - override /datasets: features
+  - _self_
+
+writer:
+  run_name: av_finetune
+
+trainer:
+  device_tensors: ["audio", "video", "labels"]
+  monitor: "max val_AUROC"
+  from_pretrained:
+    - path: saved/audio_pretrain/model_best.pth
+      source: audio_encoder
+      target: audio_encoder
+      strict: false
+    - path: saved/video_pretrain/model_best.pth
+      source: video_encoder
+      target: video_encoder
+      strict: false
+  freeze_modules: null

@@ -1,0 +1,6 @@
+_target_: src.model.VideoOnlyModel
+video_input_dim: ${video_feature_dim}
+embedding_dim: 256
+hidden_dim: 256
+dropout: 0.2
+video_input_type: features

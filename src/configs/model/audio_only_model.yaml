@@ -1,0 +1,6 @@
+_target_: src.model.AudioOnlyModel
+audio_input_dim: ${audio_feature_dim}
+embedding_dim: 256
+hidden_dim: 256
+dropout: 0.2
+audio_input_type: features
