@@ -109,6 +109,31 @@ def masked_mean(hidden_states: torch.Tensor, attention_mask: torch.Tensor | None
     return masked.sum(dim=1) / denom
 
 
+def pool_audio_hidden_states(
+    model,
+    hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+) -> torch.Tensor:
+    """
+    Pool WavLM hidden states with the correct feature-level attention mask.
+
+    WavLM receives an attention mask in waveform time steps, while
+    `last_hidden_state` is already temporally downsampled. We therefore need to
+    convert the input mask to feature-vector resolution before masked pooling.
+    """
+    if attention_mask is None:
+        return hidden_states.mean(dim=1)
+
+    if hasattr(model, "_get_feature_vector_attention_mask"):
+        feature_attention_mask = model._get_feature_vector_attention_mask(
+            hidden_states.shape[1],
+            attention_mask,
+        )
+        return masked_mean(hidden_states, feature_attention_mask)
+
+    return hidden_states.mean(dim=1)
+
+
 def to_mono_resampled_audio(audio: torch.Tensor, orig_sr: int, target_sr: int) -> np.ndarray:
     audio = audio.float()
 
@@ -147,7 +172,8 @@ def extract_wavlm_feature(
     with torch.no_grad():
         outputs = model(**inputs)
 
-    feature = masked_mean(
+    feature = pool_audio_hidden_states(
+        model,
         outputs.last_hidden_state,
         inputs.get("attention_mask"),
     )
