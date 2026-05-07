@@ -12,12 +12,6 @@ def _pad_audio_batch(audio_items: list[torch.Tensor]) -> torch.Tensor:
     Returns:
         [batch_size, channels, max_num_audio_samples]
     """
-    if all(
-        torch.is_tensor(audio) and audio.ndim == 1
-        for audio in audio_items
-    ):
-        return torch.stack([audio.float() for audio in audio_items], dim=0)
-
     processed = []
 
     max_channels = 1
@@ -69,6 +63,9 @@ def collate_fn(dataset_items: list[dict]) -> dict:
 
     It stacks fixed-size video tensors and pads variable-length audio tensors.
     """
+    if len(dataset_items) == 0:
+        raise ValueError("collate_fn received an empty batch.")
+
     result_batch = {}
 
     if "video" in dataset_items[0]:

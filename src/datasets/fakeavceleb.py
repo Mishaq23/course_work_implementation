@@ -1,3 +1,4 @@
+import logging
 import random
 from pathlib import Path
 
@@ -6,6 +7,8 @@ from tqdm.auto import tqdm
 from src.datasets.av_raw_dataset import AVRawDataset
 from src.datasets.label_inference import infer_fakeavceleb_label
 from src.utils.io_utils import read_json, write_json
+
+logger = logging.getLogger(__name__)
 
 
 class FakeAVCelebDataset(AVRawDataset):
@@ -21,6 +24,7 @@ class FakeAVCelebDataset(AVRawDataset):
         root_dir: str | Path,
         index_dir: str | Path | None = None,
         num_frames: int = 16,
+        video_size: int | tuple[int, int] | None = 224,
         limit: int | None = None,
         shuffle_index: bool = False,
         instance_transforms=None,
@@ -70,6 +74,7 @@ class FakeAVCelebDataset(AVRawDataset):
         super().__init__(
             index=index,
             num_frames=num_frames,
+            video_size=video_size,
             limit=limit,
             shuffle_index=shuffle_index,
             instance_transforms=instance_transforms,
@@ -119,7 +124,7 @@ class FakeAVCelebDataset(AVRawDataset):
 
         index = []
 
-        print("Creating FakeAVCeleb full index")
+        logger.info("Creating FakeAVCeleb full index")
 
         for idx, video_path in enumerate(tqdm(video_paths)):
             label, fake_type = infer_fakeavceleb_label(video_path)
@@ -161,7 +166,7 @@ class FakeAVCelebDataset(AVRawDataset):
         rng.shuffle(val_index)
         rng.shuffle(test_index)
 
-        print(
+        logger.info(
             "FakeAVCeleb split sizes: "
             f"train={len(train_index)}, "
             f"val={len(val_index)}, "

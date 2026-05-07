@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import torchvision.io as io
 
 from src.datasets.base_dataset import BaseDataset
@@ -16,11 +17,13 @@ class AVRawDataset(BaseDataset):
         self,
         index: list[dict],
         num_frames: int = 16,
+        video_size: int | tuple[int, int] | None = 224,
         limit: int | None = None,
         shuffle_index: bool = False,
         instance_transforms=None,
     ):
         self.num_frames = num_frames
+        self.video_size = video_size
 
         super().__init__(
             index=index,
@@ -56,7 +59,11 @@ class AVRawDataset(BaseDataset):
         return instance_data
 
     def load_object(self, path: str):
-        video, audio, info = io.read_video(path, pts_unit="sec")
+        try:
+            video, audio, info = io.read_video(path, pts_unit="sec")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to read audio/video file: {path}") from exc
+
         return video, audio, info
 
     def _sample_frames(self, video: torch.Tensor) -> torch.Tensor:
@@ -77,6 +84,19 @@ class AVRawDataset(BaseDataset):
         # [T, H, W, C] uint8 -> [T, C, H, W] float [0, 1]
         video = video.float() / 255.0
         video = video.permute(0, 3, 1, 2)
+
+        if self.video_size is not None:
+            if isinstance(self.video_size, int):
+                size = (self.video_size, self.video_size)
+            else:
+                size = self.video_size
+
+            video = F.interpolate(
+                video,
+                size=size,
+                mode="bilinear",
+                align_corners=False,
+            )
         return video
 
     def _preprocess_audio(self, audio: torch.Tensor | None) -> torch.Tensor:
@@ -87,6 +107,10 @@ class AVRawDataset(BaseDataset):
 
         if audio.ndim == 1:
             audio = audio.unsqueeze(0)
+
+        # Some backends return audio as [num_samples, num_channels].
+        if audio.ndim == 2 and audio.shape[0] > audio.shape[1] and audio.shape[1] <= 8:
+            audio = audio.transpose(0, 1)
 
         if audio.numel() == 0:
             return torch.zeros(1, 1)

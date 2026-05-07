@@ -36,6 +36,9 @@ def move_batch_transforms_to_device(batch_transforms, device):
             tensor name.
         device (str): device to use for batch transforms.
     """
+    if batch_transforms is None:
+        return
+
     for transform_type in batch_transforms.keys():
         transforms = batch_transforms.get(transform_type)
         if transforms is not None:
@@ -70,10 +73,15 @@ def get_dataloaders(config, device):
     for dataset_partition in config.datasets.keys():
         dataset = datasets[dataset_partition]
 
-        assert config.dataloader.batch_size <= len(dataset), (
-            f"The batch size ({config.dataloader.batch_size}) cannot "
-            f"be larger than the dataset length ({len(dataset)})"
-        )
+        if len(dataset) == 0:
+            raise ValueError(f"Dataset partition '{dataset_partition}' is empty.")
+
+        if dataset_partition == "train" and config.dataloader.batch_size > len(dataset):
+            raise ValueError(
+                f"Train batch size ({config.dataloader.batch_size}) cannot be larger "
+                f"than train dataset length ({len(dataset)}), because drop_last=True "
+                "would yield zero batches."
+            )
 
         partition_dataloader = instantiate(
             config.dataloader,
