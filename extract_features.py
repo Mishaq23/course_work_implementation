@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +47,11 @@ def parse_args():
         "--rebuild-index",
         action="store_true",
         help="Rebuild FakeAVCeleb train/val/test json indices.",
+    )
+    parser.add_argument(
+        "--fail-on-error",
+        action="store_true",
+        help="Stop extraction on the first unreadable/corrupted sample instead of skipping it.",
     )
     return parser.parse_args()
 
@@ -196,6 +202,12 @@ def save_split_features(output_dir: Path, audio_features, video_features, labels
     torch.save(meta, output_dir / "meta.pt")
 
 
+def save_skipped_samples(output_dir: Path, skipped_samples: list[dict]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "skipped_samples.json").open("w", encoding="utf-8") as file_obj:
+        json.dump(skipped_samples, file_obj, indent=2)
+
+
 def main():
     args = parse_args()
     set_random_seed(args.seed)
@@ -224,32 +236,52 @@ def main():
         video_features = {}
         labels = {}
         meta = {}
+        skipped_samples = []
 
-        for sample in tqdm(dataset, desc=f"extract-{split}", total=len(dataset)):
-            sample_id = sample["sample_id"]
-            audio_features[sample_id] = extract_wavlm_feature(
-                audio=sample["audio"],
-                audio_sample_rate=int(sample.get("audio_sample_rate", 0)),
-                processor=audio_processor,
-                model=audio_model,
-                device=device,
-                target_sr=args.audio_target_sr,
-            )
-            video_features[sample_id] = extract_videomae_feature(
-                video=sample["video"],
-                processor=video_processor,
-                model=video_model,
-                device=device,
-            )
-            labels[sample_id] = int(sample["labels"].item())
-            meta[sample_id] = {
-                "dataset": sample.get("dataset", "fakeavceleb"),
-                "fake_type": sample.get("fake_type", "unknown"),
-                "degradation": sample.get("degradation", "clean"),
-                "audio_degradation": sample.get("audio_degradation", "clean"),
-                "video_degradation": sample.get("video_degradation", "clean"),
-                "path": sample.get("path"),
-            }
+        for sample_idx in tqdm(range(len(dataset)), desc=f"extract-{split}", total=len(dataset)):
+            index_entry = dataset._index[sample_idx]
+
+            try:
+                sample = dataset[sample_idx]
+                sample_id = sample["sample_id"]
+                audio_features[sample_id] = extract_wavlm_feature(
+                    audio=sample["audio"],
+                    audio_sample_rate=int(sample.get("audio_sample_rate", 0)),
+                    processor=audio_processor,
+                    model=audio_model,
+                    device=device,
+                    target_sr=args.audio_target_sr,
+                )
+                video_features[sample_id] = extract_videomae_feature(
+                    video=sample["video"],
+                    processor=video_processor,
+                    model=video_model,
+                    device=device,
+                )
+                labels[sample_id] = int(sample["labels"].item())
+                meta[sample_id] = {
+                    "dataset": sample.get("dataset", "fakeavceleb"),
+                    "fake_type": sample.get("fake_type", "unknown"),
+                    "degradation": sample.get("degradation", "clean"),
+                    "audio_degradation": sample.get("audio_degradation", "clean"),
+                    "video_degradation": sample.get("video_degradation", "clean"),
+                    "path": sample.get("path"),
+                }
+            except Exception as exc:
+                if args.fail_on_error:
+                    raise
+
+                skipped_samples.append(
+                    {
+                        "sample_id": index_entry.get("sample_id"),
+                        "path": index_entry.get("path"),
+                        "error": str(exc),
+                    }
+                )
+                print(
+                    f"[{split}] skipped sample {index_entry.get('sample_id')} "
+                    f"because of: {exc}"
+                )
 
         save_split_features(
             output_dir=output_root / split,
@@ -258,11 +290,12 @@ def main():
             labels=labels,
             meta=meta,
         )
+        save_skipped_samples(output_root / split, skipped_samples)
 
         first_audio_dim = next(iter(audio_features.values())).numel() if audio_features else 0
         first_video_dim = next(iter(video_features.values())).numel() if video_features else 0
         print(
-            f"[{split}] saved {len(labels)} samples | "
+            f"[{split}] saved {len(labels)} samples | skipped={len(skipped_samples)} | "
             f"audio_dim={first_audio_dim} | video_dim={first_video_dim}"
         )
 
