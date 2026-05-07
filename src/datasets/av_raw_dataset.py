@@ -62,7 +62,10 @@ class AVRawDataset(BaseDataset):
         try:
             video, audio, info = io.read_video(path, pts_unit="sec")
         except Exception as exc:
-            raise RuntimeError(f"Failed to read audio/video file: {path}") from exc
+            raise RuntimeError(
+                f"Failed to read audio/video file: {path}. "
+                f"Original error: {type(exc).__name__}: {exc}"
+            ) from exc
 
         return video, audio, info
 
