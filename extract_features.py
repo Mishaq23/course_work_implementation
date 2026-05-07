@@ -58,14 +58,19 @@ def resolve_device(device_name: str) -> str:
 
 def load_backbones(audio_model_name_or_path: str, video_model_name_or_path: str, device: str):
     try:
-        from transformers import AutoConfig, AutoModel, AutoProcessor, VideoMAEImageProcessor
+        from transformers import (
+            AutoConfig,
+            AutoFeatureExtractor,
+            AutoModel,
+            VideoMAEImageProcessor,
+        )
     except ImportError as exc:
         raise ImportError(
             "Feature extraction requires `transformers`. Install it with "
             "`pip install transformers`."
         ) from exc
 
-    audio_processor = AutoProcessor.from_pretrained(audio_model_name_or_path)
+    audio_processor = AutoFeatureExtractor.from_pretrained(audio_model_name_or_path)
     audio_model = AutoModel.from_pretrained(audio_model_name_or_path).to(device)
     audio_model.eval()
 
