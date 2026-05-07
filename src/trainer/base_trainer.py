@@ -1,4 +1,6 @@
 from abc import abstractmethod
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import torch
 from numpy import inf
@@ -8,6 +10,32 @@ from tqdm.auto import tqdm
 from src.datasets.data_utils import inf_loop
 from src.metrics.tracker import MetricTracker
 from src.utils.io_utils import ROOT_PATH
+
+
+def freeze_modules_by_prefix(model, module_prefixes, logger=None):
+    """
+    Freeze parameters whose names start with one of the configured prefixes.
+    """
+    if module_prefixes is None:
+        return 0
+
+    if isinstance(module_prefixes, str):
+        module_prefixes = [module_prefixes]
+
+    frozen_params = 0
+    for name, parameter in model.named_parameters():
+        if any(name.startswith(prefix) for prefix in module_prefixes):
+            parameter.requires_grad = False
+            frozen_params += parameter.numel()
+
+    if logger is not None:
+        logger.info(
+            "Frozen %d parameters for modules: %s",
+            frozen_params,
+            ", ".join(module_prefixes),
+        )
+
+    return frozen_params
 
 
 class BaseTrainer:
@@ -70,7 +98,7 @@ class BaseTrainer:
         self.criterion = criterion
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-        self.batch_transforms = batch_transforms
+        self.batch_transforms = batch_transforms or {}
 
         # define dataloaders
         self.train_dataloader = dataloaders["train"]
@@ -117,15 +145,17 @@ class BaseTrainer:
 
         # define metrics
         self.metrics = metrics
+        self.train_metric_objects = self.metrics["train"]
+        self.evaluation_metric_objects = self.metrics["inference"]
         self.train_metrics = MetricTracker(
             *self.config.writer.loss_names,
             "grad_norm",
-            *[m.name for m in self.metrics["train"]],
+            *[m.name for m in self.train_metric_objects],
             writer=self.writer,
         )
         self.evaluation_metrics = MetricTracker(
             *self.config.writer.loss_names,
-            *[m.name for m in self.metrics["inference"]],
+            *[m.name for m in self.evaluation_metric_objects],
             writer=self.writer,
         )
 
@@ -141,6 +171,9 @@ class BaseTrainer:
 
         if config.trainer.get("from_pretrained") is not None:
             self._from_pretrained(config.trainer.get("from_pretrained"))
+
+        if config.trainer.get("freeze_modules") is not None:
+            self._freeze_modules(config.trainer.get("freeze_modules"))
 
     def train(self):
         """
@@ -200,8 +233,11 @@ class BaseTrainer:
         self.is_train = True
         self.model.train()
         self.train_metrics.reset()
+        self._reset_metric_objects(self.train_metric_objects)
         self.writer.set_step((epoch - 1) * self.epoch_len)
         self.writer.add_scalar("epoch", epoch)
+        last_train_metrics = self.train_metrics.result()
+
         for batch_idx, batch in enumerate(
             tqdm(self.train_dataloader, desc="train", total=self.epoch_len)
         ):
@@ -228,8 +264,10 @@ class BaseTrainer:
                         epoch, self._progress(batch_idx), batch["loss"].item()
                     )
                 )
-                self.writer.add_scalar(
-                    "learning rate", self.lr_scheduler.get_last_lr()[0]
+                self.writer.add_scalar("learning rate", self._get_learning_rate())
+                self._update_metric_tracker_from_objects(
+                    self.train_metrics,
+                    self.train_metric_objects,
                 )
                 self._log_scalars(self.train_metrics)
                 self._log_batch(batch_idx, batch)
@@ -237,6 +275,7 @@ class BaseTrainer:
                 # because we are interested in recent train metrics
                 last_train_metrics = self.train_metrics.result()
                 self.train_metrics.reset()
+                self._reset_metric_objects(self.train_metric_objects)
             if batch_idx + 1 >= self.epoch_len:
                 break
 
@@ -263,21 +302,28 @@ class BaseTrainer:
         self.is_train = False
         self.model.eval()
         self.evaluation_metrics.reset()
+        self._reset_metric_objects(self.evaluation_metric_objects)
+        last_batch = None
         with torch.no_grad():
             for batch_idx, batch in tqdm(
                 enumerate(dataloader),
                 desc=part,
                 total=len(dataloader),
             ):
-                batch = self.process_batch(
+                last_batch = self.process_batch(
                     batch,
                     metrics=self.evaluation_metrics,
                 )
+            self._update_metric_tracker_from_objects(
+                self.evaluation_metrics,
+                self.evaluation_metric_objects,
+            )
             self.writer.set_step(epoch * self.epoch_len, part)
             self._log_scalars(self.evaluation_metrics)
-            self._log_batch(
-                batch_idx, batch, part
-            )  # log only the last batch during inference
+            if last_batch is not None:
+                self._log_batch(
+                    batch_idx, last_batch, part
+                )  # log only the last batch during inference
 
         return self.evaluation_metrics.result()
 
@@ -397,6 +443,8 @@ class BaseTrainer:
         if isinstance(parameters, torch.Tensor):
             parameters = [parameters]
         parameters = [p for p in parameters if p.grad is not None]
+        if len(parameters) == 0:
+            return 0.0
         total_norm = torch.norm(
             torch.stack([torch.norm(p.grad.detach(), norm_type) for p in parameters]),
             norm_type,
@@ -451,6 +499,20 @@ class BaseTrainer:
         for metric_name in metric_tracker.keys():
             self.writer.add_scalar(f"{metric_name}", metric_tracker.avg(metric_name))
 
+    def _reset_metric_objects(self, metric_objects):
+        for metric in metric_objects:
+            metric.reset()
+
+    def _update_metric_tracker_from_objects(self, metric_tracker, metric_objects):
+        for metric in metric_objects:
+            metric_tracker.update(metric.name, metric.compute())
+
+    def _get_learning_rate(self):
+        if self.lr_scheduler is not None:
+            return self.lr_scheduler.get_last_lr()[0]
+
+        return self.optimizer.param_groups[0]["lr"]
+
     def _save_checkpoint(self, epoch, save_best=False, only_best=False):
         """
         Save the checkpoints.
@@ -468,7 +530,9 @@ class BaseTrainer:
             "epoch": epoch,
             "state_dict": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
-            "lr_scheduler": self.lr_scheduler.state_dict(),
+            "lr_scheduler": None
+            if self.lr_scheduler is None
+            else self.lr_scheduler.state_dict(),
             "monitor_best": self.mnt_best,
             "config": self.config,
         }
@@ -497,9 +561,9 @@ class BaseTrainer:
         Args:
             resume_path (str): Path to the checkpoint to be resumed.
         """
-        resume_path = str(resume_path)
+        resume_path = str(self._resolve_checkpoint_path(resume_path))
         self.logger.info(f"Loading checkpoint: {resume_path} ...")
-        checkpoint = torch.load(resume_path, self.device)
+        checkpoint = torch.load(resume_path, map_location=self.device)
         self.start_epoch = checkpoint["epoch"] + 1
         self.mnt_best = checkpoint["monitor_best"]
 
@@ -523,31 +587,135 @@ class BaseTrainer:
             )
         else:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
-            self.lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+            if self.lr_scheduler is not None and checkpoint["lr_scheduler"] is not None:
+                self.lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
 
         self.logger.info(
             f"Checkpoint loaded. Resume training from epoch {self.start_epoch}"
         )
 
-    def _from_pretrained(self, pretrained_path):
+    def _from_pretrained(self, pretrained):
         """
-        Init model with weights from pretrained pth file.
+        Init model with weights from pretrained pth file(s).
 
-        Notice that 'pretrained_path' can be any path on the disk. It is not
-        necessary to locate it in the experiment saved dir. The function
-        initializes only the model.
+        Accepted formats:
+            trainer.from_pretrained: path/to/full_checkpoint.pth
+
+            trainer.from_pretrained:
+              path: path/to/full_checkpoint.pth
+              strict: false
+
+            trainer.from_pretrained:
+              - path: saved/audio/model_best.pth
+                source: audio_encoder
+                target: audio_encoder
+              - path: saved/video/model_best.pth
+                source: video_encoder
+                target: video_encoder
+
+        The list format is useful for assembling an AV model from separately
+        pretrained audio-only and video-only models.
 
         Args:
-            pretrained_path (str): path to the model state dict.
+            pretrained (str | dict | list[dict]): checkpoint path or loading spec.
         """
-        pretrained_path = str(pretrained_path)
+        if isinstance(pretrained, Sequence) and not isinstance(pretrained, (str, bytes)):
+            for pretrained_spec in pretrained:
+                self._load_pretrained_spec(pretrained_spec)
+            return
+
+        self._load_pretrained_spec(pretrained)
+
+    def _load_pretrained_spec(self, pretrained_spec):
+        if isinstance(pretrained_spec, Mapping):
+            pretrained_path = pretrained_spec["path"]
+            source_prefix = pretrained_spec.get("source")
+            target_prefix = pretrained_spec.get("target")
+            strict = pretrained_spec.get(
+                "strict", source_prefix is None and target_prefix is None
+            )
+        else:
+            pretrained_path = pretrained_spec
+            source_prefix = None
+            target_prefix = None
+            strict = True
+
+        pretrained_path = str(self._resolve_checkpoint_path(pretrained_path))
         if hasattr(self, "logger"):  # to support both trainer and inferencer
             self.logger.info(f"Loading model weights from: {pretrained_path} ...")
         else:
             print(f"Loading model weights from: {pretrained_path} ...")
-        checkpoint = torch.load(pretrained_path, self.device)
+        checkpoint = torch.load(pretrained_path, map_location=self.device)
 
         if checkpoint.get("state_dict") is not None:
-            self.model.load_state_dict(checkpoint["state_dict"])
+            state_dict = checkpoint["state_dict"]
         else:
-            self.model.load_state_dict(checkpoint)
+            state_dict = checkpoint
+
+        state_dict = self._remap_state_dict(
+            state_dict=state_dict,
+            source_prefix=source_prefix,
+            target_prefix=target_prefix,
+        )
+        incompatible = self.model.load_state_dict(state_dict, strict=strict)
+
+        if hasattr(self, "logger") and not strict:
+            missing = len(incompatible.missing_keys)
+            unexpected = len(incompatible.unexpected_keys)
+            self.logger.info(
+                "Loaded pretrained weights with strict=False "
+                f"(missing={missing}, unexpected={unexpected})."
+            )
+
+    def _remap_state_dict(self, state_dict, source_prefix=None, target_prefix=None):
+        if source_prefix is None and target_prefix is None:
+            return state_dict
+
+        remapped = {}
+        source_prefix = source_prefix.rstrip(".") if source_prefix else None
+        target_prefix = target_prefix.rstrip(".") if target_prefix else None
+
+        for key, value in state_dict.items():
+            new_key = key
+
+            if source_prefix is not None:
+                prefix = f"{source_prefix}."
+                if not key.startswith(prefix):
+                    continue
+                new_key = key[len(prefix):]
+
+            if target_prefix is not None:
+                new_key = f"{target_prefix}.{new_key}"
+
+            remapped[new_key] = value
+
+        if len(remapped) == 0:
+            raise ValueError(
+                "No pretrained weights matched the requested source prefix "
+                f"'{source_prefix}'."
+            )
+
+        return remapped
+
+    def _freeze_modules(self, module_prefixes):
+        """
+        Freeze parameters whose names start with one of the configured prefixes.
+        Example: trainer.freeze_modules='[audio_encoder,video_encoder]'.
+        """
+        return freeze_modules_by_prefix(
+            self.model,
+            module_prefixes=module_prefixes,
+            logger=self.logger,
+        )
+
+    def _resolve_checkpoint_path(self, checkpoint_path):
+        checkpoint_path = Path(checkpoint_path)
+
+        if checkpoint_path.is_absolute():
+            return checkpoint_path
+
+        root_candidate = ROOT_PATH / checkpoint_path
+        if root_candidate.exists():
+            return root_candidate
+
+        return self.checkpoint_dir / checkpoint_path

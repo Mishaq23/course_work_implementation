@@ -7,6 +7,7 @@ from omegaconf import OmegaConf
 
 from src.datasets.data_utils import get_dataloaders
 from src.trainer import Trainer
+from src.trainer.base_trainer import freeze_modules_by_prefix
 from src.utils.init_utils import set_random_seed, setup_saving_and_logging
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -24,7 +25,7 @@ def main(config):
     """
     set_random_seed(config.trainer.seed)
 
-    project_config = OmegaConf.to_container(config)
+    project_config = OmegaConf.to_container(config, resolve=True)
     logger = setup_saving_and_logging(config)
     writer = instantiate(config.writer, logger, project_config)
 
@@ -39,6 +40,11 @@ def main(config):
 
     # build model architecture, then print to console
     model = instantiate(config.model).to(device)
+    freeze_modules_by_prefix(
+        model,
+        config.trainer.get("freeze_modules"),
+        logger=logger,
+    )
     logger.info(model)
 
     # get function handles of loss and metrics
@@ -46,7 +52,13 @@ def main(config):
     metrics = instantiate(config.metrics)
 
     # build optimizer, learning rate scheduler
-    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if len(trainable_params) == 0:
+        raise ValueError(
+            "No trainable parameters left after applying freeze_modules. "
+            "Adjust trainer.freeze_modules or model configuration."
+        )
+
     optimizer = instantiate(config.optimizer, params=trainable_params)
     lr_scheduler = instantiate(config.lr_scheduler, optimizer=optimizer)
 

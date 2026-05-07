@@ -3,11 +3,11 @@ import warnings
 import hydra
 import torch
 from hydra.utils import instantiate
+from pathlib import Path
 
 from src.datasets.data_utils import get_dataloaders
 from src.trainer import Inferencer
 from src.utils.init_utils import set_random_seed
-from src.utils.io_utils import ROOT_PATH
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -41,8 +41,12 @@ def main(config):
     metrics = instantiate(config.metrics)
 
     # save_path for model predictions
-    save_path = ROOT_PATH / "data" / "saved" / config.inferencer.save_path
-    save_path.mkdir(exist_ok=True, parents=True)
+    save_path = None
+    if config.inferencer.get("save_path") is not None:
+        save_path = Path(config.inferencer.save_path)
+        if not save_path.is_absolute():
+            save_path = Path(hydra.utils.get_original_cwd()) / save_path
+        save_path.mkdir(exist_ok=True, parents=True)
 
     inferencer = Inferencer(
         model=model,

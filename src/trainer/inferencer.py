@@ -1,6 +1,7 @@
 import torch
 from tqdm.auto import tqdm
 
+from src.metrics.binary import logits_to_binary_probs
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 
@@ -69,11 +70,13 @@ class Inferencer(BaseTrainer):
         # define metrics
         self.metrics = metrics
         if self.metrics is not None:
+            self.evaluation_metric_objects = self.metrics["inference"]
             self.evaluation_metrics = MetricTracker(
-                *[m.name for m in self.metrics["inference"]],
+                *[m.name for m in self.evaluation_metric_objects],
                 writer=None,
             )
         else:
+            self.evaluation_metric_objects = []
             self.evaluation_metrics = None
 
         if not skip_model_load:
@@ -123,8 +126,8 @@ class Inferencer(BaseTrainer):
         batch.update(outputs)
 
         if metrics is not None:
-            for met in self.metrics["inference"]:
-                metrics.update(met.name, met(**batch))
+            for met in self.evaluation_metric_objects:
+                met.update(**batch)
 
         # Some saving logic. This is an example
         # Use if you need to save predictions on disk
@@ -137,12 +140,14 @@ class Inferencer(BaseTrainer):
             # https://github.com/pytorch/pytorch/issues/1995
             logits = batch["logits"][i].clone()
             label = batch["labels"][i].clone()
-            pred_label = logits.argmax(dim=-1)
+            pred_score = logits_to_binary_probs(logits.unsqueeze(0)).squeeze(0)
+            pred_label = (pred_score >= 0.5).long()
 
             output_id = current_id + i
 
             output = {
                 "pred_label": pred_label,
+                "pred_score": pred_score,
                 "label": label,
             }
 
@@ -166,23 +171,34 @@ class Inferencer(BaseTrainer):
         self.is_train = False
         self.model.eval()
 
-        self.evaluation_metrics.reset()
+        if self.evaluation_metrics is not None:
+            self.evaluation_metrics.reset()
+            self._reset_metric_objects(self.evaluation_metric_objects)
 
         # create Save dir
         if self.save_path is not None:
             (self.save_path / part).mkdir(exist_ok=True, parents=True)
 
+        last_batch = None
         with torch.no_grad():
             for batch_idx, batch in tqdm(
                 enumerate(dataloader),
                 desc=part,
                 total=len(dataloader),
             ):
-                batch = self.process_batch(
+                last_batch = self.process_batch(
                     batch_idx=batch_idx,
                     batch=batch,
                     part=part,
                     metrics=self.evaluation_metrics,
                 )
+
+        if self.evaluation_metrics is None:
+            return {}
+
+        self._update_metric_tracker_from_objects(
+            self.evaluation_metrics,
+            self.evaluation_metric_objects,
+        )
 
         return self.evaluation_metrics.result()

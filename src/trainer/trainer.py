@@ -29,10 +29,10 @@ class Trainer(BaseTrainer):
         batch = self.move_batch_to_device(batch)
         batch = self.transform_batch(batch)  # transform batch on device -- faster
 
-        metric_funcs = self.metrics["inference"]
+        metric_funcs = self.evaluation_metric_objects
         if self.is_train:
-            metric_funcs = self.metrics["train"]
-            self.optimizer.zero_grad()
+            metric_funcs = self.train_metric_objects
+            self.optimizer.zero_grad(set_to_none=True)
 
         outputs = self.model(**batch)
         batch.update(outputs)
@@ -47,13 +47,23 @@ class Trainer(BaseTrainer):
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
 
+        batch_size = self._infer_batch_size(batch)
+
         # update metrics for each loss (in case of multiple losses)
         for loss_name in self.config.writer.loss_names:
-            metrics.update(loss_name, batch[loss_name].item())
+            metrics.update(loss_name, batch[loss_name].item(), n=batch_size)
 
         for met in metric_funcs:
-            metrics.update(met.name, met(**batch))
+            met.update(**batch)
         return batch
+
+    @staticmethod
+    def _infer_batch_size(batch):
+        labels = batch.get("labels")
+        if hasattr(labels, "shape") and len(labels.shape) > 0:
+            return int(labels.shape[0])
+
+        return 1
 
     def _log_batch(self, batch_idx, batch, mode="train"):
         """
