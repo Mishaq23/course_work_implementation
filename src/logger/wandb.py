@@ -37,10 +37,13 @@ class WandBWriter:
             mode (str): if online, log data to the remote server. If
                 offline, log locally.
         """
+        self.wandb = None
+
         try:
             import wandb
 
-            wandb.login()
+            if mode == "online":
+                wandb.login()
 
             self.run_id = run_id
 
@@ -58,6 +61,8 @@ class WandBWriter:
 
         except ImportError:
             logger.warning("For use wandb install it via \n\t pip install wandb")
+        except Exception as exc:
+            logger.warning("WandB initialization failed, continuing without it: %s", exc)
 
         self.step = 0
         # the mode is usually equal to the current partition name
@@ -112,6 +117,9 @@ class WandBWriter:
             checkpoint_path (str): path to the checkpoint file.
             save_dir (str): path to the dir, where checkpoint is saved.
         """
+        if self.wandb is None:
+            return
+
         self.wandb.save(checkpoint_path, base_path=save_dir)
 
     def add_scalar(self, scalar_name, scalar):
@@ -122,6 +130,9 @@ class WandBWriter:
             scalar_name (str): name of the scalar to use in the tracker.
             scalar (float): value of the scalar.
         """
+        if self.wandb is None:
+            return
+
         self.wandb.log(
             {
                 self._object_name(scalar_name): scalar,
@@ -136,6 +147,9 @@ class WandBWriter:
         Args:
             scalars (dict): dict, containing scalar name and value.
         """
+        if self.wandb is None:
+            return
+
         self.wandb.log(
             {
                 self._object_name(scalar_name): scalar
@@ -153,6 +167,9 @@ class WandBWriter:
             image (Path | ndarray | Image): image in the WandB-friendly
                 format.
         """
+        if self.wandb is None:
+            return
+
         self.wandb.log(
             {self._object_name(image_name): self.wandb.Image(image)}, step=self.step
         )
@@ -166,7 +183,13 @@ class WandBWriter:
             audio (Path | ndarray): audio in the WandB-friendly format.
             sample_rate (int): audio sample rate.
         """
+        if self.wandb is None:
+            return
+
         audio = audio.detach().cpu().numpy().T
+        if self.wandb is None:
+            return
+
         self.wandb.log(
             {
                 self._object_name(audio_name): self.wandb.Audio(
@@ -184,6 +207,9 @@ class WandBWriter:
             text_name (str): name of the text to use in the tracker.
             text (str): text content.
         """
+        if self.wandb is None:
+            return
+
         self.wandb.log(
             {self._object_name(text_name): self.wandb.Html(text)}, step=self.step
         )
@@ -198,6 +224,9 @@ class WandBWriter:
                 histogram of.
             bins (int | str): the definition of bins for the histogram.
         """
+        if self.wandb is None:
+            return
+
         values_for_hist = values_for_hist.detach().cpu().numpy()
         np_hist = np.histogram(values_for_hist, bins=bins)
         if np_hist[0].shape[0] > 512:
@@ -215,6 +244,9 @@ class WandBWriter:
             table_name (str): name of the table to use in the tracker.
             table (DataFrame): table content.
         """
+        if self.wandb is None:
+            return
+
         self.wandb.log(
             {self._object_name(table_name): self.wandb.Table(dataframe=table)},
             step=self.step,
