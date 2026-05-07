@@ -190,15 +190,20 @@ def extract_videomae_feature(
         frame.detach().cpu().numpy().astype(np.float32, copy=False)
         for frame in video
     ]
-    inputs = processor(frames, return_tensors="pt")
+    inputs = processor([frames], return_tensors="pt")
 
     if "pixel_values" not in inputs:
         raise KeyError("Video processor did not return `pixel_values`.")
 
     pixel_values = inputs["pixel_values"]
-    if pixel_values.ndim != 5:
+
+    # Be tolerant to processor variants and normalize to [B, C, T, H, W].
+    if pixel_values.ndim == 4:
+        pixel_values = pixel_values.unsqueeze(0)
+    elif pixel_values.ndim != 5:
         raise ValueError(
-            f"Expected video processor output with 5 dims, got shape {tuple(pixel_values.shape)}."
+            "Expected video processor output with 4 or 5 dims, "
+            f"got shape {tuple(pixel_values.shape)}."
         )
 
     # Most processors return [B, T, C, H, W], while VideoMAE models expect [B, C, T, H, W].
@@ -306,6 +311,7 @@ def main():
                     model=video_model,
                     device=device,
                 )
+
                 audio_features[sample_id] = audio_feature
                 video_features[sample_id] = video_feature
                 labels[sample_id] = int(sample["labels"].item())
