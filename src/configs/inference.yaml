@@ -1,13 +1,22 @@
 defaults:
-  - model: baseline
+  - model: gated_av_model
   - metrics: example
-  - datasets: example_eval # we do not want to run inference on training data
-  - dataloader: example
-  - transforms: example
+  - datasets: features
+  - dataloader: av
+  - transforms: av_identity
   - _self_
+
+features_root: ???
+dataset_root: ???
+index_dir: ./data/indices/fakeavceleb
+num_frames: 16
+video_size: 224
+audio_feature_dim: 1024
+video_feature_dim: 768
+
 inferencer:
-  device_tensors: ["data_object", "labels"] # which tensors should be on device (ex. GPU)
+  device_tensors: ["audio", "video", "labels"] # which tensors should be on device
   device: auto # device name or "auto"
-  save_path: "example" # any name here, can be a dataset name
+  save_path: "saved/predictions"
   seed: 1
-  from_pretrained: "saved/model_best.pth" # path to the pretrained model
+  from_pretrained: "saved/av_finetune/model_best.pth"

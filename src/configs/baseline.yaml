@@ -1,15 +1,19 @@
 defaults:
-  - model: baseline
-  - writer: wandb
+  - model: av_baseline_model
+  - writer: dummy
   - metrics: example
   - datasets: fakeavceleb
   - dataloader: av
-  - transforms: example
+  - transforms: av_identity
   - _self_
 
 dataset_root: ???
 index_dir: ./data/indices/fakeavceleb
 num_frames: 16
+video_size: 224
+features_root: ???
+audio_feature_dim: 1024
+video_feature_dim: 768
 
 optimizer:
   _target_: torch.optim.Adam
@@ -21,7 +25,8 @@ lr_scheduler:
   step_size: ${trainer.epoch_len}
 
 loss_function:
-  _target_: src.loss.ExampleLoss
+  _target_: src.loss.BCELoss
+  pos_weight: null
 
 trainer:
   log_step: 50
@@ -29,9 +34,11 @@ trainer:
   epoch_len: 500
   device_tensors: ["video", "audio", "labels"]
   resume_from: null
+  from_pretrained: null
+  freeze_modules: null
   device: auto
   override: False
-  monitor: "max test_MulticlassAccuracy"
+  monitor: "max val_AUROC"
   save_period: 5
   early_stop: ${trainer.n_epochs}
   save_dir: "saved"
