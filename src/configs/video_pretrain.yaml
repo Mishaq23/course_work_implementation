@@ -1,7 +1,7 @@
 defaults:
   - baseline
   - override /model: video_only_model
-  - override /datasets: features
+  - override /datasets: features_train_val
   - _self_
 
 writer:
@@ -9,4 +9,5 @@ writer:
 
 trainer:
   device_tensors: ["video", "labels"]
+  use_weighted_sampler: true
   monitor: "max val_AUROC"

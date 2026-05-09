@@ -6,6 +6,7 @@ from torchmetrics.functional.classification import (
     binary_f1_score,
     binary_precision,
     binary_recall,
+    binary_specificity,
 )
 
 from src.metrics.base_metric import BaseMetric
@@ -83,9 +84,27 @@ class RecallMetric(BinaryMetric):
         return binary_recall(probs, labels, threshold=self.threshold)
 
 
+class SpecificityMetric(BinaryMetric):
+    def _compute_metric(self, probs: torch.Tensor, labels: torch.Tensor):
+        if labels.unique().numel() < 2:
+            return float("nan")
+
+        return binary_specificity(probs, labels, threshold=self.threshold)
+
+
 class F1Metric(BinaryMetric):
     def _compute_metric(self, probs: torch.Tensor, labels: torch.Tensor):
         return binary_f1_score(probs, labels, threshold=self.threshold)
+
+
+class BalancedAccuracyMetric(BinaryMetric):
+    def _compute_metric(self, probs: torch.Tensor, labels: torch.Tensor):
+        if labels.unique().numel() < 2:
+            return float("nan")
+
+        recall = binary_recall(probs, labels, threshold=self.threshold)
+        specificity = binary_specificity(probs, labels, threshold=self.threshold)
+        return (recall + specificity) / 2.0
 
 
 class AUROCMetric(BinaryMetric):

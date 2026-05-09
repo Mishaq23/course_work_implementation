@@ -1,9 +1,14 @@
+import logging
 from itertools import repeat
 
+import torch
 from hydra.utils import instantiate
+from torch.utils.data import WeightedRandomSampler
 
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
+
+logger = logging.getLogger(__name__)
 
 
 def inf_loop(dataloader):
@@ -46,6 +51,51 @@ def move_batch_transforms_to_device(batch_transforms, device):
                 transforms[transform_name] = transforms[transform_name].to(device)
 
 
+def build_balanced_train_sampler(dataset):
+    """
+    Build a weighted sampler that approximately balances classes.
+
+    The sampler uses inverse class frequency weights and samples with
+    replacement. This is useful for strongly imbalanced binary datasets such
+    as FakeAVCeleb after collapsing all fake types into one positive label.
+    """
+    if not hasattr(dataset, "get_labels"):
+        raise TypeError(
+            "Weighted sampling requires the dataset to implement get_labels()."
+        )
+
+    labels = torch.tensor(dataset.get_labels(), dtype=torch.long)
+    if labels.numel() == 0:
+        raise ValueError("Cannot build weighted sampler for an empty dataset.")
+
+    unique_labels = torch.unique(labels)
+    if unique_labels.numel() < 2:
+        raise ValueError(
+            "Weighted sampling requires at least two classes in the train split."
+        )
+
+    class_counts = torch.bincount(labels)
+    if torch.any(class_counts == 0):
+        raise ValueError(
+            "Weighted sampling requires every present class index to have "
+            "at least one sample."
+        )
+
+    class_weights = 1.0 / class_counts.float()
+    sample_weights = class_weights[labels]
+
+    logger.info(
+        "Using weighted train sampler with class counts: %s",
+        class_counts.tolist(),
+    )
+
+    return WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True,
+    )
+
+
 def get_dataloaders(config, device):
     """
     Create dataloaders for each of the dataset partitions.
@@ -83,12 +133,21 @@ def get_dataloaders(config, device):
                 "would yield zero batches."
             )
 
+        sampler = None
+        shuffle = dataset_partition == "train"
+        if dataset_partition == "train" and config.trainer.get(
+            "use_weighted_sampler", False
+        ):
+            sampler = build_balanced_train_sampler(dataset)
+            shuffle = False
+
         partition_dataloader = instantiate(
             config.dataloader,
             dataset=dataset,
             collate_fn=collate_fn,
             drop_last=(dataset_partition == "train"),
-            shuffle=(dataset_partition == "train"),
+            shuffle=shuffle,
+            sampler=sampler,
             worker_init_fn=set_worker_seed,
         )
         dataloaders[dataset_partition] = partition_dataloader

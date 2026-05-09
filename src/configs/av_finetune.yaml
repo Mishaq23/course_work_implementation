@@ -1,7 +1,7 @@
 defaults:
   - baseline
   - override /model: gated_av_model
-  - override /datasets: features
+  - override /datasets: features_train_val
   - _self_
 
 writer:
@@ -9,6 +9,7 @@ writer:
 
 trainer:
   device_tensors: ["audio", "video", "labels"]
+  use_weighted_sampler: true
   monitor: "max val_AUROC"
   from_pretrained:
     - path: saved/audio_pretrain/model_best.pth

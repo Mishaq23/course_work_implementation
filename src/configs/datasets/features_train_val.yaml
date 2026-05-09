@@ -1,0 +1,9 @@
+train:
+  _target_: src.datasets.AVFeatureDataset
+  features_dir: ${features_root}/train
+  instance_transforms: ${transforms.instance_transforms.train}
+
+val:
+  _target_: src.datasets.AVFeatureDataset
+  features_dir: ${features_root}/val
+  instance_transforms: ${transforms.instance_transforms.inference}

@@ -10,6 +10,9 @@ train:
     device: ${metrics.device}
     name: "PRAUC"
 inference:
+  - _target_: src.metrics.BalancedAccuracyMetric
+    device: ${metrics.device}
+    name: "BalancedAccuracy"
   - _target_: src.metrics.AccuracyMetric
     device: ${metrics.device}
     name: "Accuracy"
@@ -19,6 +22,9 @@ inference:
   - _target_: src.metrics.RecallMetric
     device: ${metrics.device}
     name: "Recall"
+  - _target_: src.metrics.SpecificityMetric
+    device: ${metrics.device}
+    name: "Specificity"
   - _target_: src.metrics.F1Metric
     device: ${metrics.device}
     name: "F1"

@@ -71,6 +71,14 @@ class BaseDataset(Dataset):
         """
         return len(self._index)
 
+    def get_labels(self) -> list[int]:
+        """
+        Return labels for all indexed samples.
+
+        This is useful for sampler construction in imbalanced settings.
+        """
+        return [int(item["label"]) for item in self._index]
+
     def load_object(self, path):
         """
         Load object from disk.

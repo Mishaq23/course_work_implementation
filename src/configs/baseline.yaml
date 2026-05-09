@@ -33,6 +33,7 @@ trainer:
   n_epochs: 100
   epoch_len: 500
   device_tensors: ["video", "audio", "labels"]
+  use_weighted_sampler: False
   resume_from: null
   from_pretrained: null
   freeze_modules: null
