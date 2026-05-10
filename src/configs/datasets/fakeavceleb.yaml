@@ -9,7 +9,7 @@ train:
   val_ratio: 0.1
   test_ratio: 0.1
   split_seed: 42
-  split_strategy: id_tuple
+  split_strategy: id_component
   instance_transforms: ${transforms.instance_transforms.train}
 
 val:
@@ -23,7 +23,7 @@ val:
   val_ratio: 0.1
   test_ratio: 0.1
   split_seed: 42
-  split_strategy: id_tuple
+  split_strategy: id_component
   instance_transforms: ${transforms.instance_transforms.inference}
 
 test:
@@ -37,5 +37,5 @@ test:
   val_ratio: 0.1
   test_ratio: 0.1
   split_seed: 42
-  split_strategy: id_tuple
+  split_strategy: id_component
   instance_transforms: ${transforms.instance_transforms.inference}

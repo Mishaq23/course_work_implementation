@@ -35,7 +35,7 @@ class FakeAVCelebDataset(AVRawDataset):
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         split_seed: int = 42,
-        split_strategy: str = "id_tuple",
+        split_strategy: str = "id_component",
         rebuild_index: bool = False,
         video_extensions: tuple[str, ...] = (".mp4",),
         *args,
@@ -98,7 +98,7 @@ class FakeAVCelebDataset(AVRawDataset):
             )
 
     def _check_split_strategy(self) -> None:
-        valid_strategies = {"sample", "id_tuple"}
+        valid_strategies = {"sample", "id_tuple", "id_component"}
         if self.split_strategy not in valid_strategies:
             raise ValueError(
                 f"Unknown split_strategy={self.split_strategy!r}. "
@@ -206,8 +206,11 @@ class FakeAVCelebDataset(AVRawDataset):
         group_to_items = defaultdict(list)
         label_totals = Counter()
 
+        if hasattr(self, "_component_group_cache"):
+            delattr(self, "_component_group_cache")
+
         for item in full_index:
-            group_key = self._get_group_key(item)
+            group_key = self._get_group_key(item, full_index)
             group_to_items[group_key].append(item)
             label_totals[int(item["label"])] += 1
 
@@ -311,7 +314,64 @@ class FakeAVCelebDataset(AVRawDataset):
             return "::".join(id_tokens)
         return path_str
 
-    def _get_group_key(self, item: dict) -> str:
+    def _extract_id_tokens(self, item: dict) -> tuple[str, ...]:
+        relative_path = item.get("relative_path", item.get("path", ""))
+        return tuple(sorted(set(self._id_pattern.findall(str(relative_path).lower()))))
+
+    def _build_component_group_map(self, full_index: list[dict]) -> dict[str, str]:
+        parent: dict[str, str] = {}
+
+        def find(node: str) -> str:
+            parent.setdefault(node, node)
+            while parent[node] != node:
+                parent[node] = parent[parent[node]]
+                node = parent[node]
+            return node
+
+        def union(left: str, right: str) -> None:
+            left_root = find(left)
+            right_root = find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        sample_tokens: dict[str, tuple[str, ...]] = {}
+        for item in full_index:
+            sample_id = item["sample_id"]
+            tokens = self._extract_id_tokens(item)
+            sample_tokens[sample_id] = tokens
+            if len(tokens) >= 2:
+                anchor = tokens[0]
+                for token in tokens[1:]:
+                    union(anchor, token)
+
+        component_map: dict[str, str] = {}
+        for item in full_index:
+            sample_id = item["sample_id"]
+            tokens = sample_tokens[sample_id]
+            if tokens:
+                roots = sorted({find(token) for token in tokens})
+                component_map[sample_id] = "component::" + "::".join(roots)
+            else:
+                relative_path = item.get("relative_path", item.get("path", ""))
+                component_map[sample_id] = "path::" + str(relative_path).lower()
+
+        return component_map
+
+    def _get_group_key(self, item: dict, full_index: list[dict] | None = None) -> str:
+        if self.split_strategy == "id_component":
+            if not hasattr(self, "_component_group_cache"):
+                if full_index is None:
+                    raise ValueError("full_index is required for id_component grouping.")
+                self._component_group_cache = self._build_component_group_map(full_index)
+            return self._component_group_cache[item["sample_id"]]
+
+        if self.split_strategy == "id_tuple":
+            if "group_key" in item:
+                return item["group_key"]
+
+            relative_path = item.get("relative_path", item.get("path", ""))
+            return self._build_group_key_from_path(relative_path)
+
         if "group_key" in item:
             return item["group_key"]
 
