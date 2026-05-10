@@ -13,6 +13,13 @@ from src.utils.io_utils import read_json, write_json
 logger = logging.getLogger(__name__)
 
 
+SPLIT_SCHEMA_VERSIONS = {
+    "sample": "v1",
+    "id_tuple": "v1",
+    "id_component": "v2",
+}
+
+
 class FakeAVCelebDataset(AVRawDataset):
     """
     Dataset class for FakeAVCeleb.
@@ -108,7 +115,8 @@ class FakeAVCelebDataset(AVRawDataset):
     def _split_index_filename(self, split_name: str) -> str:
         if split_name == "full":
             return "index_full.json"
-        return f"index_{self.split_strategy}_{split_name}.json"
+        schema_version = SPLIT_SCHEMA_VERSIONS[self.split_strategy]
+        return f"index_{self.split_strategy}_{schema_version}_{split_name}.json"
 
     def _create_all_indices(self) -> None:
         full_index_path = self.index_dir / self._split_index_filename("full")
@@ -269,7 +277,13 @@ class FakeAVCelebDataset(AVRawDataset):
                 ),
             )
 
-            split_state[best_split]["items"].extend(record["items"])
+            annotated_items = []
+            for item in record["items"]:
+                annotated_item = dict(item)
+                annotated_item["split_group_key"] = record["group_key"]
+                annotated_items.append(annotated_item)
+
+            split_state[best_split]["items"].extend(annotated_items)
             split_state[best_split]["size"] += record["size"]
             split_state[best_split]["label_counts"].update(record["label_counts"])
 

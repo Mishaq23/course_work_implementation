@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -47,6 +48,18 @@ def parse_args():
         "--rebuild-index",
         action="store_true",
         help="Rebuild FakeAVCeleb train/val/test json indices.",
+    )
+    parser.add_argument(
+        "--split-strategy",
+        type=str,
+        default="id_component",
+        choices=["sample", "id_tuple", "id_component"],
+        help="How to split FakeAVCeleb into train/val/test partitions.",
+    )
+    parser.add_argument(
+        "--allow-overlap",
+        action="store_true",
+        help="Skip the safety check that aborts extraction when train/val/test ids overlap.",
     )
     parser.add_argument(
         "--fail-on-error",
@@ -242,9 +255,78 @@ def build_dataset(args, split: str):
         num_frames=args.num_frames,
         video_size=args.video_size,
         limit=args.limit,
+        split_strategy=args.split_strategy,
         rebuild_index=args.rebuild_index,
         instance_transforms=None,
     )
+
+
+def extract_ids_from_index(index: list[dict]) -> set[str]:
+    id_pattern = re.compile(r"id\d+")
+    ids = set()
+    for item in index:
+        source = str(item.get("relative_path", item.get("path", ""))).lower()
+        ids.update(id_pattern.findall(source))
+    return ids
+
+
+def compute_split_summary(datasets: dict[str, FakeAVCelebDataset], split_strategy: str) -> dict:
+    summary = {
+        "split_strategy": split_strategy,
+        "splits": {},
+        "overlap_by_id": {},
+    }
+
+    split_ids: dict[str, set[str]] = {}
+    split_names = list(datasets.keys())
+
+    for split_name, dataset in datasets.items():
+        labels = [int(item["label"]) for item in dataset._index]
+        num_samples = len(labels)
+        num_fake = sum(labels)
+        split_ids[split_name] = extract_ids_from_index(dataset._index)
+        summary["splits"][split_name] = {
+            "num_samples": num_samples,
+            "num_fake": num_fake,
+            "num_real": num_samples - num_fake,
+            "fake_ratio": (num_fake / num_samples) if num_samples else None,
+        }
+
+    for idx, left in enumerate(split_names):
+        for right in split_names[idx + 1 :]:
+            overlap = split_ids[left] & split_ids[right]
+            summary["overlap_by_id"][f"{left}__{right}"] = {
+                "count": len(overlap),
+                "ids": sorted(overlap),
+            }
+
+    return summary
+
+
+def validate_split_summary(summary: dict, allow_overlap: bool) -> None:
+    overlap_counts = {
+        pair: info["count"]
+        for pair, info in summary["overlap_by_id"].items()
+    }
+    max_overlap = max(overlap_counts.values(), default=0)
+
+    print("Split summary:")
+    for split_name, stats in summary["splits"].items():
+        print(
+            f"  {split_name}: n={stats['num_samples']} "
+            f"fake={stats['num_fake']} real={stats['num_real']} "
+            f"fake_ratio={stats['fake_ratio']:.4f}"
+        )
+    for pair, count in overlap_counts.items():
+        print(f"  overlap[{pair}]={count}")
+
+    if max_overlap > 0 and not allow_overlap and summary["split_strategy"] != "sample":
+        raise RuntimeError(
+            "Detected identity overlap between splits before extraction. "
+            "Refusing to continue because this would produce leaky features. "
+            "If you intentionally want sample-level overlap, rerun with "
+            "`--split-strategy sample --allow-overlap`."
+        )
 
 
 def save_split_features(output_dir: Path, audio_features, video_features, labels, meta):
@@ -278,13 +360,21 @@ def main():
     )
 
     output_root = Path(args.output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
 
     print(f"Using device: {device}")
     print(f"Audio backbone: {args.audio_model_name_or_path}")
     print(f"Video backbone: {args.video_model_name_or_path}")
+    print(f"Split strategy: {args.split_strategy}")
+
+    datasets = {split: build_dataset(args, split) for split in args.splits}
+    split_summary = compute_split_summary(datasets, args.split_strategy)
+    with (output_root / "split_summary.json").open("w", encoding="utf-8") as file_obj:
+        json.dump(split_summary, file_obj, indent=2)
+    validate_split_summary(split_summary, allow_overlap=args.allow_overlap)
 
     for split in args.splits:
-        dataset = build_dataset(args, split)
+        dataset = datasets[split]
         audio_features = {}
         video_features = {}
         labels = {}
@@ -322,6 +412,10 @@ def main():
                     "audio_degradation": sample.get("audio_degradation", "clean"),
                     "video_degradation": sample.get("video_degradation", "clean"),
                     "path": sample.get("path"),
+                    "relative_path": index_entry.get("relative_path"),
+                    "split_group_key": index_entry.get("split_group_key", index_entry.get("group_key")),
+                    "split_strategy": args.split_strategy,
+                    "split_name": split,
                 }
             except Exception as exc:
                 if args.fail_on_error:
