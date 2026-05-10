@@ -118,15 +118,21 @@ def get_dataloaders(config, device):
     # dataset partitions init
     datasets = instantiate(config.datasets)  # instance transforms are defined inside
 
+    run_cfg = config.get("trainer")
+    is_training_run = run_cfg is not None
+    if run_cfg is None:
+        run_cfg = config.get("inferencer")
+
     # dataloaders init
     dataloaders = {}
     for dataset_partition in config.datasets.keys():
         dataset = datasets[dataset_partition]
+        is_train_partition = dataset_partition == "train" and is_training_run
 
         if len(dataset) == 0:
             raise ValueError(f"Dataset partition '{dataset_partition}' is empty.")
 
-        if dataset_partition == "train" and config.dataloader.batch_size > len(dataset):
+        if is_train_partition and config.dataloader.batch_size > len(dataset):
             raise ValueError(
                 f"Train batch size ({config.dataloader.batch_size}) cannot be larger "
                 f"than train dataset length ({len(dataset)}), because drop_last=True "
@@ -134,8 +140,8 @@ def get_dataloaders(config, device):
             )
 
         sampler = None
-        shuffle = dataset_partition == "train"
-        if dataset_partition == "train" and config.trainer.get(
+        shuffle = is_train_partition
+        if is_train_partition and run_cfg is not None and run_cfg.get(
             "use_weighted_sampler", False
         ):
             sampler = build_balanced_train_sampler(dataset)
@@ -145,7 +151,7 @@ def get_dataloaders(config, device):
             config.dataloader,
             dataset=dataset,
             collate_fn=collate_fn,
-            drop_last=(dataset_partition == "train"),
+            drop_last=is_train_partition,
             shuffle=shuffle,
             sampler=sampler,
             worker_init_fn=set_worker_seed,

@@ -1,17 +1,11 @@
 defaults:
   - baseline
   - override /model: video_only_model
-  - override /datasets: features_train_val
+  - override /datasets: features_video_train_val
   - _self_
 
 writer:
   run_name: video_pretrain
-
-datasets:
-  train:
-    label_mode: video_fake
-  val:
-    label_mode: video_fake
 
 trainer:
   device_tensors: ["video", "labels"]

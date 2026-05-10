@@ -1,0 +1,17 @@
+train:
+  _target_: src.datasets.AVFeatureDataset
+  features_dir: ${features_root}/train
+  label_mode: audio_fake
+  instance_transforms: ${transforms.instance_transforms.train}
+
+val:
+  _target_: src.datasets.AVFeatureDataset
+  features_dir: ${features_root}/val
+  label_mode: audio_fake
+  instance_transforms: ${transforms.instance_transforms.inference}
+
+test:
+  _target_: src.datasets.AVFeatureDataset
+  features_dir: ${features_root}/test
+  label_mode: audio_fake
+  instance_transforms: ${transforms.instance_transforms.inference}
