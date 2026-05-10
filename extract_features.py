@@ -8,6 +8,7 @@ import torch
 from scipy.signal import resample_poly
 from tqdm.auto import tqdm
 
+from src.datasets.degradations import add_audio_white_noise_snr
 from src.datasets.fakeavceleb import FakeAVCelebDataset
 from src.utils.init_utils import set_random_seed
 
@@ -44,6 +45,19 @@ def parse_args():
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--audio-degradation",
+        type=str,
+        default="clean",
+        choices=["clean", "white_noise"],
+        help="Optional audio degradation applied before WavLM feature extraction.",
+    )
+    parser.add_argument(
+        "--audio-white-noise-snr-db",
+        type=float,
+        default=20.0,
+        help="SNR in dB for --audio-degradation white_noise.",
+    )
     parser.add_argument(
         "--rebuild-index",
         action="store_true",
@@ -261,6 +275,35 @@ def build_dataset(args, split: str):
     )
 
 
+def apply_audio_degradation(
+    audio: torch.Tensor,
+    args,
+    sample_idx: int,
+) -> tuple[torch.Tensor, str]:
+    if args.audio_degradation == "clean":
+        return audio, "clean"
+
+    if args.audio_degradation == "white_noise":
+        degraded = add_audio_white_noise_snr(
+            audio=audio,
+            snr_db=args.audio_white_noise_snr_db,
+            seed=args.seed + sample_idx,
+        )
+        degradation_name = f"white_noise_snr_{args.audio_white_noise_snr_db:g}db"
+        return degraded, degradation_name
+
+    raise ValueError(f"Unsupported audio degradation: {args.audio_degradation}")
+
+
+def build_overall_degradation_label(
+    audio_degradation: str,
+    video_degradation: str,
+) -> str:
+    if audio_degradation == "clean" and video_degradation == "clean":
+        return "clean"
+    return f"audio:{audio_degradation}|video:{video_degradation}"
+
+
 def extract_ids_from_index(index: list[dict]) -> set[str]:
     id_pattern = re.compile(r"id\d+")
     ids = set()
@@ -366,6 +409,7 @@ def main():
     print(f"Audio backbone: {args.audio_model_name_or_path}")
     print(f"Video backbone: {args.video_model_name_or_path}")
     print(f"Split strategy: {args.split_strategy}")
+    print(f"Audio degradation: {args.audio_degradation}")
 
     datasets = {split: build_dataset(args, split) for split in args.splits}
     split_summary = compute_split_summary(datasets, args.split_strategy)
@@ -387,8 +431,13 @@ def main():
             try:
                 sample = dataset[sample_idx]
                 sample_id = sample["sample_id"]
-                audio_feature = extract_wavlm_feature(
+                degraded_audio, audio_degradation_name = apply_audio_degradation(
                     audio=sample["audio"],
+                    args=args,
+                    sample_idx=sample_idx,
+                )
+                audio_feature = extract_wavlm_feature(
+                    audio=degraded_audio,
                     audio_sample_rate=int(sample.get("audio_sample_rate", 0)),
                     processor=audio_processor,
                     model=audio_model,
@@ -408,8 +457,11 @@ def main():
                 meta[sample_id] = {
                     "dataset": sample.get("dataset", "fakeavceleb"),
                     "fake_type": sample.get("fake_type", "unknown"),
-                    "degradation": sample.get("degradation", "clean"),
-                    "audio_degradation": sample.get("audio_degradation", "clean"),
+                    "degradation": build_overall_degradation_label(
+                        audio_degradation=audio_degradation_name,
+                        video_degradation=sample.get("video_degradation", "clean"),
+                    ),
+                    "audio_degradation": audio_degradation_name,
                     "video_degradation": sample.get("video_degradation", "clean"),
                     "path": sample.get("path"),
                     "relative_path": index_entry.get("relative_path"),
