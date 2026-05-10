@@ -1,5 +1,7 @@
 import logging
 import random
+import re
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from tqdm.auto import tqdm
@@ -33,6 +35,7 @@ class FakeAVCelebDataset(AVRawDataset):
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         split_seed: int = 42,
+        split_strategy: str = "id_tuple",
         rebuild_index: bool = False,
         video_extensions: tuple[str, ...] = (".mp4",),
         *args,
@@ -61,10 +64,13 @@ class FakeAVCelebDataset(AVRawDataset):
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
         self.split_seed = split_seed
+        self.split_strategy = split_strategy
+        self._id_pattern = re.compile(r"id\d+")
 
         self._check_split_ratios()
+        self._check_split_strategy()
 
-        index_path = self.index_dir / f"index_{name}.json"
+        index_path = self.index_dir / self._split_index_filename(name)
 
         if self.rebuild_index or not index_path.exists():
             self._create_all_indices()
@@ -91,11 +97,24 @@ class FakeAVCelebDataset(AVRawDataset):
                 f"Got {total}."
             )
 
+    def _check_split_strategy(self) -> None:
+        valid_strategies = {"sample", "id_tuple"}
+        if self.split_strategy not in valid_strategies:
+            raise ValueError(
+                f"Unknown split_strategy={self.split_strategy!r}. "
+                f"Expected one of {sorted(valid_strategies)}."
+            )
+
+    def _split_index_filename(self, split_name: str) -> str:
+        if split_name == "full":
+            return "index_full.json"
+        return f"index_{self.split_strategy}_{split_name}.json"
+
     def _create_all_indices(self) -> None:
-        full_index_path = self.index_dir / "index_full.json"
-        train_index_path = self.index_dir / "index_train.json"
-        val_index_path = self.index_dir / "index_val.json"
-        test_index_path = self.index_dir / "index_test.json"
+        full_index_path = self.index_dir / self._split_index_filename("full")
+        train_index_path = self.index_dir / self._split_index_filename("train")
+        val_index_path = self.index_dir / self._split_index_filename("val")
+        test_index_path = self.index_dir / self._split_index_filename("test")
 
         if full_index_path.exists() and not self.rebuild_index:
             full_index = read_json(str(full_index_path))
@@ -135,6 +154,7 @@ class FakeAVCelebDataset(AVRawDataset):
                     "sample_id": f"fakeavceleb_{idx:06d}",
                     "path": str(video_path),
                     "relative_path": str(relative_path),
+                    "group_key": self._build_group_key_from_path(relative_path),
                     "label": label,
                     "dataset": "fakeavceleb",
                     "fake_type": fake_type,
@@ -147,6 +167,12 @@ class FakeAVCelebDataset(AVRawDataset):
         return index
 
     def _split_index(self, full_index: list[dict]):
+        if self.split_strategy == "sample":
+            return self._split_index_samplewise(full_index)
+
+        return self._split_index_groupwise(full_index)
+
+    def _split_index_samplewise(self, full_index: list[dict]):
         rng = random.Random(self.split_seed)
 
         real_samples = [item for item in full_index if item["label"] == 0]
@@ -174,6 +200,123 @@ class FakeAVCelebDataset(AVRawDataset):
         )
 
         return train_index, val_index, test_index
+
+    def _split_index_groupwise(self, full_index: list[dict]):
+        rng = random.Random(self.split_seed)
+        group_to_items = defaultdict(list)
+        label_totals = Counter()
+
+        for item in full_index:
+            group_key = self._get_group_key(item)
+            group_to_items[group_key].append(item)
+            label_totals[int(item["label"])] += 1
+
+        group_records = []
+        for group_key, items in group_to_items.items():
+            label_counts = Counter(int(item["label"]) for item in items)
+            group_records.append(
+                {
+                    "group_key": group_key,
+                    "items": items,
+                    "size": len(items),
+                    "label_counts": label_counts,
+                }
+            )
+
+        rng.shuffle(group_records)
+        group_records.sort(
+            key=lambda record: (record["size"], tuple(sorted(record["label_counts"].items()))),
+            reverse=True,
+        )
+
+        split_names = ["train", "val", "test"]
+        split_ratios = {
+            "train": self.train_ratio,
+            "val": self.val_ratio,
+            "test": self.test_ratio,
+        }
+
+        targets = {
+            split_name: {
+                "size": len(full_index) * split_ratios[split_name],
+                "label_counts": {
+                    label: label_totals[label] * split_ratios[split_name]
+                    for label in label_totals
+                },
+            }
+            for split_name in split_names
+        }
+        split_state = {
+            split_name: {
+                "items": [],
+                "size": 0,
+                "label_counts": Counter(),
+            }
+            for split_name in split_names
+        }
+
+        for record in group_records:
+            best_split = min(
+                split_names,
+                key=lambda split_name: self._group_assignment_score(
+                    state=split_state[split_name],
+                    target=targets[split_name],
+                    record=record,
+                    all_labels=label_totals.keys(),
+                ),
+            )
+
+            split_state[best_split]["items"].extend(record["items"])
+            split_state[best_split]["size"] += record["size"]
+            split_state[best_split]["label_counts"].update(record["label_counts"])
+
+        for split_name in split_names:
+            rng.shuffle(split_state[split_name]["items"])
+
+        logger.info(
+            "FakeAVCeleb group-wise split sizes: train=%d, val=%d, test=%d | groups=%d",
+            len(split_state["train"]["items"]),
+            len(split_state["val"]["items"]),
+            len(split_state["test"]["items"]),
+            len(group_records),
+        )
+
+        return (
+            split_state["train"]["items"],
+            split_state["val"]["items"],
+            split_state["test"]["items"],
+        )
+
+    def _group_assignment_score(self, state, target, record, all_labels):
+        projected_size = state["size"] + record["size"]
+        size_target = max(float(target["size"]), 1.0)
+        score = abs(projected_size - target["size"]) / size_target
+
+        for label in all_labels:
+            projected_label_count = state["label_counts"][label] + record["label_counts"][label]
+            label_target = float(target["label_counts"].get(label, 0.0))
+            denom = max(label_target, 1.0)
+            score += abs(projected_label_count - label_target) / denom
+
+        # Small penalty for overfilling a split; encourages earlier use of still-empty splits.
+        if projected_size > target["size"]:
+            score += (projected_size - target["size"]) / size_target
+
+        return score
+
+    def _build_group_key_from_path(self, path: str | Path) -> str:
+        path_str = str(path).lower()
+        id_tokens = sorted(set(self._id_pattern.findall(path_str)))
+        if id_tokens:
+            return "::".join(id_tokens)
+        return path_str
+
+    def _get_group_key(self, item: dict) -> str:
+        if "group_key" in item:
+            return item["group_key"]
+
+        relative_path = item.get("relative_path", item.get("path", ""))
+        return self._build_group_key_from_path(relative_path)
 
     def _split_group(self, samples: list[dict]):
         n_total = len(samples)
