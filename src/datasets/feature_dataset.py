@@ -15,11 +15,13 @@ class AVFeatureDataset(BaseDataset):
     def __init__(
         self,
         features_dir: str | Path,
+        label_mode: str = "any_fake",
         limit: int | None = None,
         shuffle_index: bool = False,
         instance_transforms=None,
     ):
         self.features_dir = Path(features_dir)
+        self.label_mode = label_mode
         self._validate_feature_dir()
 
         self.audio_features = torch.load(
@@ -33,6 +35,7 @@ class AVFeatureDataset(BaseDataset):
         self.labels = torch.load(self.features_dir / "labels.pt", map_location="cpu")
         self.meta = torch.load(self.features_dir / "meta.pt", map_location="cpu")
         self._validate_feature_keys()
+        self._validate_label_mode()
 
         index = self._create_index()
 
@@ -87,6 +90,32 @@ class AVFeatureDataset(BaseDataset):
                 + ", ".join(mismatched_sources)
             )
 
+    def _validate_label_mode(self) -> None:
+        valid_modes = {"any_fake", "audio_fake", "video_fake"}
+        if self.label_mode not in valid_modes:
+            raise ValueError(
+                f"Unknown label_mode={self.label_mode}. "
+                f"Expected one of: {sorted(valid_modes)}."
+            )
+
+    def _resolve_label(self, sample_id: str) -> int:
+        if self.label_mode == "any_fake":
+            return int(self.labels[sample_id])
+
+        fake_type = self.meta[sample_id].get("fake_type", "unknown")
+        if fake_type not in {"real", "audio_fake", "video_fake", "av_fake"}:
+            raise ValueError(
+                f"Unknown fake_type={fake_type!r} for sample_id={sample_id}."
+            )
+
+        if self.label_mode == "audio_fake":
+            return int(fake_type in {"audio_fake", "av_fake"})
+
+        if self.label_mode == "video_fake":
+            return int(fake_type in {"video_fake", "av_fake"})
+
+        raise AssertionError("Unhandled label mode.")
+
     def _create_index(self) -> list[dict]:
         index = []
 
@@ -97,7 +126,7 @@ class AVFeatureDataset(BaseDataset):
                 {
                     "sample_id": sample_id,
                     "path": sample_id,
-                    "label": self.labels[sample_id],
+                    "label": self._resolve_label(sample_id),
                     "dataset": meta.get("dataset", "unknown"),
                     "fake_type": meta.get("fake_type", "unknown"),
                     "degradation": meta.get("degradation", "clean"),

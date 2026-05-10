@@ -7,6 +7,12 @@ defaults:
 writer:
   run_name: audio_pretrain
 
+datasets:
+  train:
+    label_mode: audio_fake
+  val:
+    label_mode: audio_fake
+
 trainer:
   device_tensors: ["audio", "labels"]
   use_weighted_sampler: true

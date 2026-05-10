@@ -7,6 +7,12 @@ defaults:
 writer:
   run_name: video_pretrain
 
+datasets:
+  train:
+    label_mode: video_fake
+  val:
+    label_mode: video_fake
+
 trainer:
   device_tensors: ["video", "labels"]
   use_weighted_sampler: true
