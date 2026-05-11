@@ -8,7 +8,16 @@ import torch
 from scipy.signal import resample_poly
 from tqdm.auto import tqdm
 
-from src.datasets.degradations import add_audio_white_noise_snr
+from src.datasets.degradations import (
+    add_audio_clipping,
+    add_audio_impulsive_noise,
+    add_audio_white_noise_snr,
+    add_video_blur,
+    add_video_downscale,
+    add_video_gaussian_noise,
+    add_video_low_light,
+    add_video_quantization,
+)
 from src.datasets.fakeavceleb import FakeAVCelebDataset
 from src.utils.init_utils import set_random_seed
 
@@ -49,7 +58,7 @@ def parse_args():
         "--audio-degradation",
         type=str,
         default="clean",
-        choices=["clean", "white_noise"],
+        choices=["clean", "white_noise", "clipping", "impulsive_noise"],
         help="Optional audio degradation applied before WavLM feature extraction.",
     )
     parser.add_argument(
@@ -57,6 +66,68 @@ def parse_args():
         type=float,
         default=20.0,
         help="SNR in dB for --audio-degradation white_noise.",
+    )
+    parser.add_argument(
+        "--audio-clipping-threshold",
+        type=float,
+        default=0.6,
+        help="Threshold for --audio-degradation clipping.",
+    )
+    parser.add_argument(
+        "--audio-impulsive-max-percent",
+        type=float,
+        default=10.0,
+        help="Max impulse percent for --audio-degradation impulsive_noise.",
+    )
+    parser.add_argument(
+        "--audio-impulsive-gain",
+        type=float,
+        default=2.0,
+        help="Impulse gain for --audio-degradation impulsive_noise.",
+    )
+    parser.add_argument(
+        "--video-degradation",
+        type=str,
+        default="clean",
+        choices=[
+            "clean",
+            "downscale",
+            "blur",
+            "gaussian_noise",
+            "low_light",
+            "quantization",
+        ],
+        help="Optional video degradation applied before VideoMAE feature extraction.",
+    )
+    parser.add_argument(
+        "--video-downscale-factor",
+        type=float,
+        default=0.5,
+        help="Scale factor for --video-degradation downscale.",
+    )
+    parser.add_argument(
+        "--video-blur-kernel-size",
+        type=int,
+        default=5,
+        help="Odd kernel size for --video-degradation blur.",
+    )
+    parser.add_argument(
+        "--video-gaussian-noise-std",
+        type=float,
+        default=0.05,
+        help="Noise std for --video-degradation gaussian_noise.",
+    )
+    parser.add_argument(
+        "--video-low-light-factor",
+        type=float,
+        default=0.5,
+        help="Brightness factor for --video-degradation low_light.",
+    )
+    parser.add_argument(
+        "--video-quantization-levels",
+        type=int,
+        default=32,
+        help="Quantization levels for --video-degradation quantization.",
     )
     parser.add_argument(
         "--rebuild-index",
@@ -292,7 +363,81 @@ def apply_audio_degradation(
         degradation_name = f"white_noise_snr_{args.audio_white_noise_snr_db:g}db"
         return degraded, degradation_name
 
+    if args.audio_degradation == "clipping":
+        degraded = add_audio_clipping(
+            audio=audio,
+            clipping_threshold=args.audio_clipping_threshold,
+        )
+        degradation_name = f"clipping_t{args.audio_clipping_threshold:g}"
+        return degraded, degradation_name
+
+    if args.audio_degradation == "impulsive_noise":
+        degraded = add_audio_impulsive_noise(
+            audio=audio,
+            max_percent=args.audio_impulsive_max_percent,
+            gain=args.audio_impulsive_gain,
+            seed=args.seed + sample_idx,
+        )
+        degradation_name = (
+            "impulsive_noise"
+            f"_p{args.audio_impulsive_max_percent:g}"
+            f"_g{args.audio_impulsive_gain:g}"
+        )
+        return degraded, degradation_name
+
     raise ValueError(f"Unsupported audio degradation: {args.audio_degradation}")
+
+
+def apply_video_degradation(
+    video: torch.Tensor,
+    args,
+    sample_idx: int,
+) -> tuple[torch.Tensor, str]:
+    if args.video_degradation == "clean":
+        return video, "clean"
+
+    if args.video_degradation == "downscale":
+        degraded = add_video_downscale(
+            video=video,
+            scale_factor=args.video_downscale_factor,
+        )
+        degradation_name = f"downscale_x{args.video_downscale_factor:g}"
+        return degraded, degradation_name
+
+    if args.video_degradation == "blur":
+        degraded = add_video_blur(
+            video=video,
+            kernel_size=args.video_blur_kernel_size,
+        )
+        degradation_name = f"blur_k{args.video_blur_kernel_size}"
+        return degraded, degradation_name
+
+    if args.video_degradation == "gaussian_noise":
+        degraded = add_video_gaussian_noise(
+            video=video,
+            std=args.video_gaussian_noise_std,
+            seed=args.seed + sample_idx,
+        )
+        degradation_name = f"gaussian_noise_std{args.video_gaussian_noise_std:g}"
+        return degraded, degradation_name
+
+    if args.video_degradation == "low_light":
+        degraded = add_video_low_light(
+            video=video,
+            factor=args.video_low_light_factor,
+        )
+        degradation_name = f"low_light_f{args.video_low_light_factor:g}"
+        return degraded, degradation_name
+
+    if args.video_degradation == "quantization":
+        degraded = add_video_quantization(
+            video=video,
+            levels=args.video_quantization_levels,
+        )
+        degradation_name = f"quantization_l{args.video_quantization_levels}"
+        return degraded, degradation_name
+
+    raise ValueError(f"Unsupported video degradation: {args.video_degradation}")
 
 
 def build_overall_degradation_label(
@@ -410,6 +555,7 @@ def main():
     print(f"Video backbone: {args.video_model_name_or_path}")
     print(f"Split strategy: {args.split_strategy}")
     print(f"Audio degradation: {args.audio_degradation}")
+    print(f"Video degradation: {args.video_degradation}")
 
     datasets = {split: build_dataset(args, split) for split in args.splits}
     split_summary = compute_split_summary(datasets, args.split_strategy)
@@ -436,6 +582,11 @@ def main():
                     args=args,
                     sample_idx=sample_idx,
                 )
+                degraded_video, video_degradation_name = apply_video_degradation(
+                    video=sample["video"],
+                    args=args,
+                    sample_idx=sample_idx,
+                )
                 audio_feature = extract_wavlm_feature(
                     audio=degraded_audio,
                     audio_sample_rate=int(sample.get("audio_sample_rate", 0)),
@@ -445,7 +596,7 @@ def main():
                     target_sr=args.audio_target_sr,
                 )
                 video_feature = extract_videomae_feature(
-                    video=sample["video"],
+                    video=degraded_video,
                     processor=video_processor,
                     model=video_model,
                     device=device,
@@ -459,10 +610,10 @@ def main():
                     "fake_type": sample.get("fake_type", "unknown"),
                     "degradation": build_overall_degradation_label(
                         audio_degradation=audio_degradation_name,
-                        video_degradation=sample.get("video_degradation", "clean"),
+                        video_degradation=video_degradation_name,
                     ),
                     "audio_degradation": audio_degradation_name,
-                    "video_degradation": sample.get("video_degradation", "clean"),
+                    "video_degradation": video_degradation_name,
                     "path": sample.get("path"),
                     "relative_path": index_entry.get("relative_path"),
                     "split_group_key": index_entry.get("split_group_key", index_entry.get("group_key")),
