@@ -9,6 +9,8 @@ from scipy.signal import resample_poly
 from tqdm.auto import tqdm
 
 from src.datasets.degradations import (
+    RawBoostConfig,
+    add_audio_rawboost,
     add_audio_clipping,
     add_audio_impulsive_noise,
     add_audio_white_noise_snr,
@@ -58,7 +60,7 @@ def parse_args():
         "--audio-degradation",
         type=str,
         default="clean",
-        choices=["clean", "white_noise", "clipping", "impulsive_noise"],
+        choices=["clean", "white_noise", "clipping", "impulsive_noise", "rawboost"],
         help="Optional audio degradation applied before WavLM feature extraction.",
     )
     parser.add_argument(
@@ -84,6 +86,30 @@ def parse_args():
         type=float,
         default=2.0,
         help="Impulse gain for --audio-degradation impulsive_noise.",
+    )
+    parser.add_argument(
+        "--audio-rawboost-snr-min-db",
+        type=float,
+        default=10.0,
+        help="RawBoost SSI minimum SNR in dB.",
+    )
+    parser.add_argument(
+        "--audio-rawboost-snr-max-db",
+        type=float,
+        default=40.0,
+        help="RawBoost SSI maximum SNR in dB.",
+    )
+    parser.add_argument(
+        "--audio-rawboost-max-impulse-percent",
+        type=float,
+        default=10.0,
+        help="RawBoost ISD max impulse percent.",
+    )
+    parser.add_argument(
+        "--audio-rawboost-impulse-gain",
+        type=float,
+        default=2.0,
+        help="RawBoost ISD impulse gain.",
     )
     parser.add_argument(
         "--video-degradation",
@@ -348,6 +374,7 @@ def build_dataset(args, split: str):
 
 def apply_audio_degradation(
     audio: torch.Tensor,
+    audio_sample_rate: int,
     args,
     sample_idx: int,
 ) -> tuple[torch.Tensor, str]:
@@ -382,6 +409,27 @@ def apply_audio_degradation(
             "impulsive_noise"
             f"_p{args.audio_impulsive_max_percent:g}"
             f"_g{args.audio_impulsive_gain:g}"
+        )
+        return degraded, degradation_name
+
+    if args.audio_degradation == "rawboost":
+        sample_rate = int(audio_sample_rate) if int(audio_sample_rate) > 0 else args.audio_target_sr
+        config = RawBoostConfig(
+            sample_rate=sample_rate,
+            max_impulse_percent=args.audio_rawboost_max_impulse_percent,
+            impulse_gain=args.audio_rawboost_impulse_gain,
+            snr_min_db=args.audio_rawboost_snr_min_db,
+            snr_max_db=args.audio_rawboost_snr_max_db,
+        )
+        degraded = add_audio_rawboost(
+            audio=audio,
+            config=config,
+            seed=args.seed + sample_idx,
+        )
+        degradation_name = (
+            "rawboost"
+            f"_snr{args.audio_rawboost_snr_min_db:g}-{args.audio_rawboost_snr_max_db:g}"
+            f"_imp{args.audio_rawboost_max_impulse_percent:g}"
         )
         return degraded, degradation_name
 
@@ -579,6 +627,7 @@ def main():
                 sample_id = sample["sample_id"]
                 degraded_audio, audio_degradation_name = apply_audio_degradation(
                     audio=sample["audio"],
+                    audio_sample_rate=int(sample.get("audio_sample_rate", 0)),
                     args=args,
                     sample_idx=sample_idx,
                 )
