@@ -31,6 +31,9 @@ inference:
   - _target_: src.metrics.AUROCMetric
     device: ${metrics.device}
     name: "AUROC"
+  - _target_: src.metrics.EERMetric
+    device: ${metrics.device}
+    name: "EER"
   - _target_: src.metrics.AveragePrecisionMetric
     device: ${metrics.device}
     name: "PRAUC"

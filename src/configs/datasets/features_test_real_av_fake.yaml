@@ -1,0 +1,5 @@
+test:
+  _target_: src.datasets.AVFeatureDataset
+  features_dir: ${features_root}/test
+  allowed_fake_types: ["real", "av_fake"]
+  instance_transforms: ${transforms.instance_transforms.inference}

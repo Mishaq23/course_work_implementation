@@ -16,12 +16,14 @@ class AVFeatureDataset(BaseDataset):
         self,
         features_dir: str | Path,
         label_mode: str = "any_fake",
+        allowed_fake_types: list[str] | str | None = None,
         limit: int | None = None,
         shuffle_index: bool = False,
         instance_transforms=None,
     ):
         self.features_dir = Path(features_dir)
         self.label_mode = label_mode
+        self.allowed_fake_types = self._normalize_allowed_fake_types(allowed_fake_types)
         self._validate_feature_dir()
 
         self.audio_features = torch.load(
@@ -36,6 +38,7 @@ class AVFeatureDataset(BaseDataset):
         self.meta = torch.load(self.features_dir / "meta.pt", map_location="cpu")
         self._validate_feature_keys()
         self._validate_label_mode()
+        self._validate_allowed_fake_types()
 
         index = self._create_index()
 
@@ -98,15 +101,48 @@ class AVFeatureDataset(BaseDataset):
                 f"Expected one of: {sorted(valid_modes)}."
             )
 
+    def _normalize_allowed_fake_types(
+        self,
+        allowed_fake_types: list[str] | str | None,
+    ) -> list[str] | None:
+        if allowed_fake_types is None:
+            return None
+
+        if isinstance(allowed_fake_types, str):
+            return [allowed_fake_types]
+
+        return list(allowed_fake_types)
+
+    def _validate_allowed_fake_types(self) -> None:
+        if self.allowed_fake_types is None:
+            return
+
+        valid_fake_types = {"real", "audio_fake", "video_fake", "av_fake"}
+        invalid_fake_types = sorted(
+            fake_type
+            for fake_type in self.allowed_fake_types
+            if fake_type not in valid_fake_types
+        )
+        if invalid_fake_types:
+            raise ValueError(
+                "Unknown allowed_fake_types="
+                f"{invalid_fake_types}. Expected subset of {sorted(valid_fake_types)}."
+            )
+
+    def _resolve_fake_type(self, sample_id: str) -> str:
+        fake_type = self.meta[sample_id].get("fake_type", "unknown")
+        valid_fake_types = {"real", "audio_fake", "video_fake", "av_fake"}
+        if fake_type not in valid_fake_types:
+            raise ValueError(
+                f"Unknown fake_type={fake_type!r} for sample_id={sample_id}."
+            )
+        return fake_type
+
     def _resolve_label(self, sample_id: str) -> int:
         if self.label_mode == "any_fake":
             return int(self.labels[sample_id])
 
-        fake_type = self.meta[sample_id].get("fake_type", "unknown")
-        if fake_type not in {"real", "audio_fake", "video_fake", "av_fake"}:
-            raise ValueError(
-                f"Unknown fake_type={fake_type!r} for sample_id={sample_id}."
-            )
+        fake_type = self._resolve_fake_type(sample_id)
 
         if self.label_mode == "audio_fake":
             return int(fake_type in {"audio_fake", "av_fake"})
@@ -121,6 +157,10 @@ class AVFeatureDataset(BaseDataset):
 
         for sample_id in sorted(self.labels.keys()):
             meta = self.meta[sample_id]
+            fake_type = self._resolve_fake_type(sample_id)
+
+            if self.allowed_fake_types is not None and fake_type not in self.allowed_fake_types:
+                continue
 
             index.append(
                 {
@@ -128,11 +168,18 @@ class AVFeatureDataset(BaseDataset):
                     "path": sample_id,
                     "label": self._resolve_label(sample_id),
                     "dataset": meta.get("dataset", "unknown"),
-                    "fake_type": meta.get("fake_type", "unknown"),
+                    "fake_type": fake_type,
                     "degradation": meta.get("degradation", "clean"),
                     "audio_degradation": meta.get("audio_degradation", "clean"),
                     "video_degradation": meta.get("video_degradation", "clean"),
                 }
+            )
+
+        if len(index) == 0:
+            raise ValueError(
+                "No samples left after applying feature dataset filters. "
+                f"label_mode={self.label_mode}, "
+                f"allowed_fake_types={self.allowed_fake_types}."
             )
 
         return index
