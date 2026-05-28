@@ -1,6 +1,7 @@
 import argparse
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -314,7 +315,7 @@ def extract_videomae_feature(
         frame.detach().cpu().numpy().astype(np.float32, copy=False)
         for frame in video
     ]
-    inputs = processor([frames], return_tensors="pt")
+    inputs = processor([frames], return_tensors="pt", do_rescale=False)
 
     if "pixel_values" not in inputs:
         raise KeyError("Video processor did not return `pixel_values`.")
@@ -520,12 +521,31 @@ def compute_split_summary(datasets: dict[str, FakeAVCelebDataset], split_strateg
         labels = [int(item["label"]) for item in dataset._index]
         num_samples = len(labels)
         num_fake = sum(labels)
+        fake_type_counts = Counter(
+            str(item.get("fake_type", "unknown"))
+            for item in dataset._index
+        )
+        num_audio_fake_positive = sum(
+            fake_type_counts.get(fake_type, 0)
+            for fake_type in ("audio_fake", "av_fake")
+        )
+        num_video_fake_positive = sum(
+            fake_type_counts.get(fake_type, 0)
+            for fake_type in ("video_fake", "av_fake")
+        )
         split_ids[split_name] = extract_ids_from_index(dataset._index)
         summary["splits"][split_name] = {
             "num_samples": num_samples,
             "num_fake": num_fake,
             "num_real": num_samples - num_fake,
             "fake_ratio": (num_fake / num_samples) if num_samples else None,
+            "fake_type_counts": dict(sorted(fake_type_counts.items())),
+            "audio_fake_positive_ratio": (
+                num_audio_fake_positive / num_samples
+            ) if num_samples else None,
+            "video_fake_positive_ratio": (
+                num_video_fake_positive / num_samples
+            ) if num_samples else None,
         }
 
     for idx, left in enumerate(split_names):
@@ -540,6 +560,9 @@ def compute_split_summary(datasets: dict[str, FakeAVCelebDataset], split_strateg
 
 
 def validate_split_summary(summary: dict, allow_overlap: bool) -> None:
+    def _format_ratio(value: float | None) -> str:
+        return f"{value:.4f}" if value is not None else "n/a"
+
     overlap_counts = {
         pair: info["count"]
         for pair, info in summary["overlap_by_id"].items()
@@ -551,7 +574,10 @@ def validate_split_summary(summary: dict, allow_overlap: bool) -> None:
         print(
             f"  {split_name}: n={stats['num_samples']} "
             f"fake={stats['num_fake']} real={stats['num_real']} "
-            f"fake_ratio={stats['fake_ratio']:.4f}"
+            f"fake_ratio={_format_ratio(stats['fake_ratio'])} "
+            f"audio_fake_ratio={_format_ratio(stats['audio_fake_positive_ratio'])} "
+            f"video_fake_ratio={_format_ratio(stats['video_fake_positive_ratio'])} "
+            f"fake_types={stats['fake_type_counts']}"
         )
     for pair, count in overlap_counts.items():
         print(f"  overlap[{pair}]={count}")

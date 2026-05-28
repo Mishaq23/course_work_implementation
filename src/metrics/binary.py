@@ -24,6 +24,122 @@ def logits_to_binary_probs(logits: torch.Tensor) -> torch.Tensor:
     return torch.sigmoid(logits)
 
 
+def _prepare_binary_probs_and_labels(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    probs = probs.reshape(-1).detach().cpu().to(torch.float64)
+    labels = labels.reshape(-1).detach().cpu().to(torch.long)
+    return probs, labels
+
+
+def _binary_confusion_curve(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    probs, labels = _prepare_binary_probs_and_labels(probs, labels)
+
+    positives = int((labels == 1).sum().item())
+    negatives = int((labels == 0).sum().item())
+    if positives == 0 or negatives == 0:
+        nan_tensor = torch.tensor([float("nan")], dtype=torch.float64)
+        return nan_tensor, nan_tensor, nan_tensor, nan_tensor, nan_tensor
+
+    sorted_indices = torch.argsort(probs, descending=True)
+    sorted_probs = probs[sorted_indices]
+    sorted_labels = labels[sorted_indices]
+
+    tp_cumsum = torch.cumsum((sorted_labels == 1).to(torch.float64), dim=0)
+    fp_cumsum = torch.cumsum((sorted_labels == 0).to(torch.float64), dim=0)
+
+    threshold_ends = torch.ones_like(sorted_probs, dtype=torch.bool)
+    threshold_ends[:-1] = sorted_probs[:-1] != sorted_probs[1:]
+
+    thresholds = sorted_probs[threshold_ends]
+    true_positives = tp_cumsum[threshold_ends]
+    false_positives = fp_cumsum[threshold_ends]
+
+    # Candidate above the largest score corresponds to predicting every sample as negative.
+    all_negative_threshold = torch.nextafter(
+        sorted_probs[:1],
+        torch.full_like(sorted_probs[:1], float("inf")),
+    )
+    thresholds = torch.cat([all_negative_threshold, thresholds], dim=0)
+    true_positives = torch.cat(
+        [torch.zeros(1, dtype=torch.float64), true_positives],
+        dim=0,
+    )
+    false_positives = torch.cat(
+        [torch.zeros(1, dtype=torch.float64), false_positives],
+        dim=0,
+    )
+
+    true_negatives = negatives - false_positives
+    false_negatives = positives - true_positives
+    return thresholds, true_positives, false_positives, true_negatives, false_negatives
+
+
+def _threshold_objective_values(
+    true_positives: torch.Tensor,
+    false_positives: torch.Tensor,
+    true_negatives: torch.Tensor,
+    false_negatives: torch.Tensor,
+    objective: str,
+) -> torch.Tensor:
+    if objective == "accuracy":
+        total = true_positives + false_positives + true_negatives + false_negatives
+        return (true_positives + true_negatives) / total.clamp_min(1e-12)
+
+    if objective == "balanced_accuracy":
+        recall = true_positives / (true_positives + false_negatives).clamp_min(1e-12)
+        specificity = true_negatives / (true_negatives + false_positives).clamp_min(1e-12)
+        return (recall + specificity) / 2.0
+
+    if objective == "f1":
+        denom = (2.0 * true_positives) + false_positives + false_negatives
+        values = torch.zeros_like(denom)
+        valid = denom > 0
+        values[valid] = (2.0 * true_positives[valid]) / denom[valid]
+        return values
+
+    raise ValueError(
+        f"Unknown threshold objective={objective!r}. "
+        "Expected one of: ['accuracy', 'balanced_accuracy', 'f1']."
+    )
+
+
+def find_optimal_threshold(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+    objective: str = "balanced_accuracy",
+) -> tuple[float, float]:
+    thresholds, tp, fp, tn, fn = _binary_confusion_curve(probs, labels)
+    if torch.isnan(thresholds).all():
+        return float("nan"), float("nan")
+
+    objective_values = _threshold_objective_values(tp, fp, tn, fn, objective=objective)
+    best_value = torch.max(objective_values)
+    best_candidates = torch.nonzero(
+        torch.isclose(
+            objective_values,
+            best_value,
+            atol=1e-12,
+            rtol=0.0,
+        ),
+        as_tuple=False,
+    ).reshape(-1)
+
+    if best_candidates.numel() == 1:
+        best_index = int(best_candidates[0].item())
+    else:
+        candidate_thresholds = thresholds[best_candidates]
+        # Prefer a threshold close to the common default when several are equally good.
+        tie_break_index = torch.argmin(torch.abs(candidate_thresholds - 0.5))
+        best_index = int(best_candidates[tie_break_index].item())
+
+    return float(thresholds[best_index].item()), float(best_value.item())
+
+
 def compute_equal_error_rate(probs: torch.Tensor, labels: torch.Tensor) -> float:
     """
     Compute Equal Error Rate from binary probabilities and labels.
@@ -114,6 +230,9 @@ class BinaryMetric(BaseMetric):
         self._probs: list[torch.Tensor] = []
         self._labels: list[torch.Tensor] = []
 
+    def set_threshold(self, threshold: float) -> None:
+        self.threshold = float(threshold)
+
     def update(self, logits: torch.Tensor, labels: torch.Tensor, **kwargs):
         probs = logits_to_binary_probs(logits).detach().cpu()
         labels = labels.detach().long().cpu()
@@ -182,6 +301,19 @@ class BalancedAccuracyMetric(BinaryMetric):
         return (recall + specificity) / 2.0
 
 
+class BestBalancedAccuracyMetric(BinaryMetric):
+    def _compute_metric(self, probs: torch.Tensor, labels: torch.Tensor):
+        if labels.unique().numel() < 2:
+            return float("nan")
+
+        _, best_value = find_optimal_threshold(
+            probs,
+            labels,
+            objective="balanced_accuracy",
+        )
+        return best_value
+
+
 class AUROCMetric(BinaryMetric):
     def _compute_metric(self, probs: torch.Tensor, labels: torch.Tensor):
         if labels.unique().numel() < 2:
@@ -201,3 +333,25 @@ class AveragePrecisionMetric(BinaryMetric):
 class EERMetric(BinaryMetric):
     def _compute_metric(self, probs: torch.Tensor, labels: torch.Tensor):
         return compute_equal_error_rate(probs, labels)
+
+
+class OptimalThresholdMetric(BinaryMetric):
+    def __init__(
+        self,
+        objective: str = "balanced_accuracy",
+        *args,
+        **kwargs,
+    ):
+        self.objective = objective
+        super().__init__(*args, **kwargs)
+
+    def _compute_metric(self, probs: torch.Tensor, labels: torch.Tensor):
+        if labels.unique().numel() < 2:
+            return float("nan")
+
+        threshold, _ = find_optimal_threshold(
+            probs,
+            labels,
+            objective=self.objective,
+        )
+        return threshold

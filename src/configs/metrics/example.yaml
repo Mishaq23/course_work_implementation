@@ -1,7 +1,9 @@
 device: "auto"
+threshold: 0.5
 train:
   - _target_: src.metrics.AccuracyMetric
     device: ${metrics.device}
+    threshold: ${metrics.threshold}
     name: "Accuracy"
   - _target_: src.metrics.AUROCMetric
     device: ${metrics.device}
@@ -10,23 +12,36 @@ train:
     device: ${metrics.device}
     name: "PRAUC"
 inference:
+  - _target_: src.metrics.OptimalThresholdMetric
+    device: ${metrics.device}
+    objective: "balanced_accuracy"
+    name: "OptimalThreshold"
+  - _target_: src.metrics.BestBalancedAccuracyMetric
+    device: ${metrics.device}
+    name: "BalancedAccuracy_best"
   - _target_: src.metrics.BalancedAccuracyMetric
     device: ${metrics.device}
+    threshold: ${metrics.threshold}
     name: "BalancedAccuracy"
   - _target_: src.metrics.AccuracyMetric
     device: ${metrics.device}
+    threshold: ${metrics.threshold}
     name: "Accuracy"
   - _target_: src.metrics.PrecisionMetric
     device: ${metrics.device}
+    threshold: ${metrics.threshold}
     name: "Precision"
   - _target_: src.metrics.RecallMetric
     device: ${metrics.device}
+    threshold: ${metrics.threshold}
     name: "Recall"
   - _target_: src.metrics.SpecificityMetric
     device: ${metrics.device}
+    threshold: ${metrics.threshold}
     name: "Specificity"
   - _target_: src.metrics.F1Metric
     device: ${metrics.device}
+    threshold: ${metrics.threshold}
     name: "F1"
   - _target_: src.metrics.AUROCMetric
     device: ${metrics.device}

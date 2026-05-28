@@ -59,6 +59,9 @@ class Inferencer(BaseTrainer):
 
         self.model = model
         self.batch_transforms = batch_transforms
+        self.decision_threshold = float(
+            config.inferencer.get("decision_threshold", 0.5)
+        )
 
         # define dataloaders
         self.evaluation_dataloaders = {k: v for k, v in dataloaders.items()}
@@ -141,7 +144,7 @@ class Inferencer(BaseTrainer):
             logits = batch["logits"][i].clone()
             label = batch["labels"][i].clone()
             pred_score = logits_to_binary_probs(logits.unsqueeze(0)).squeeze(0)
-            pred_label = (pred_score >= 0.5).long()
+            pred_label = (pred_score >= self.decision_threshold).long()
 
             output_id = current_id + i
 

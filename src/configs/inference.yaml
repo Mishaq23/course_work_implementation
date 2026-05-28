@@ -17,6 +17,7 @@ video_feature_dim: 768
 inferencer:
   device_tensors: ["audio", "video", "labels"] # which tensors should be on device
   device: auto # device name or "auto"
+  decision_threshold: ${metrics.threshold}
   save_path: "saved/predictions"
   seed: 1
   from_pretrained: "saved/av_finetune/model_best.pth"
