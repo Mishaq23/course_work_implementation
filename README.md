@@ -197,13 +197,6 @@ For raw-data evaluation, override dataset/model choices:
   inferencer.save_path=saved/raw_predictions
 ```
 
-## Tests
-
-The test suite is lightweight and uses only synthetic tensors / temporary files.
-
-```bash
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
-```
 
 ## Metrics
 
