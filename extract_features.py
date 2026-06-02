@@ -322,7 +322,6 @@ def extract_videomae_feature(
 
     pixel_values = inputs["pixel_values"]
 
-    # Be tolerant to processor variants and normalize to [B, C, T, H, W].
     if pixel_values.ndim == 4:
         pixel_values = pixel_values.unsqueeze(0)
     elif pixel_values.ndim != 5:
@@ -331,7 +330,6 @@ def extract_videomae_feature(
             f"got shape {tuple(pixel_values.shape)}."
         )
 
-    # Most processors return [B, T, C, H, W], while VideoMAE models expect [B, C, T, H, W].
     if pixel_values.shape[1] != 3 and pixel_values.shape[2] == 3:
         pixel_values = pixel_values.permute(0, 2, 1, 3, 4)
 

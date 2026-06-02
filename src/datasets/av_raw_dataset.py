@@ -84,7 +84,6 @@ class AVRawDataset(BaseDataset):
         return video[indices]
 
     def _preprocess_video(self, video: torch.Tensor) -> torch.Tensor:
-        # [T, H, W, C] uint8 -> [T, C, H, W] float [0, 1]
         video = video.float() / 255.0
         video = video.permute(0, 3, 1, 2)
 

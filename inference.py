@@ -29,18 +29,13 @@ def main(config):
     else:
         device = config.inferencer.device
 
-    # setup data_loader instances
-    # batch_transforms should be put on device
     dataloaders, batch_transforms = get_dataloaders(config, device)
 
-    # build model architecture, then print to console
     model = instantiate(config.model).to(device)
     print(model)
 
-    # get metrics
     metrics = instantiate(config.metrics)
 
-    # save_path for model predictions
     save_path = None
     if config.inferencer.get("save_path") is not None:
         save_path = Path(config.inferencer.save_path)
